@@ -120,43 +120,93 @@ export default function PriceMatrixOptimizer() {
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
-    
+
     setFileName(file.name);
     setError('');
-    
+
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const text = e.target.result;
         const lines = text.split('\n').filter(line => line.trim());
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
-        
-        // Find relevant columns
-        const costIdx = headers.findIndex(h => h.includes('unit cost') || h === 'cost' || h === 'unitcost');
-        const retailIdx = headers.findIndex(h => h.includes('unit retail') || h === 'retail' || h === 'unitretail' || h === 'price');
-        const qtyIdx = headers.findIndex(h => h.includes('qty') || h === 'quantity');
-        const totalCostIdx = headers.findIndex(h => h.includes('total cost'));
-        const totalRetailIdx = headers.findIndex(h => h.includes('total retail'));
-        
-        if (costIdx === -1) {
-          setError('Could not find a "Unit Cost" column in the CSV. Please ensure your file has cost data.');
+
+        // --- HEADER SCANNER: Find the actual header row (may not be line 1) ---
+        let headerRowIndex = -1;
+        let headers = [];
+
+        for (let i = 0; i < Math.min(lines.length, 10); i++) {
+          const row = lines[i].toLowerCase();
+          // Look for keywords that indicate this is the header row
+          if (row.includes('cost') || row.includes('price') || row.includes('qty') || row.includes('total')) {
+            headerRowIndex = i;
+            headers = lines[i].split(',').map(h => h.trim().toLowerCase());
+            break;
+          }
+        }
+
+        if (headerRowIndex === -1) {
+          setError('Could not find a valid header row (looking for "Cost", "Price", or "Qty"). Please check your CSV.');
           return;
         }
-        
+
+        // Find relevant columns (improved to handle "Buy Price" variations)
+        const costIdx = headers.findIndex(h => h.includes('unit cost') || h.includes('buy price') || h === 'cost' || h === 'unitcost');
+        const retailIdx = headers.findIndex(h => h.includes('unit retail') || h.includes('sell price') || h === 'retail' || h === 'unitretail' || h === 'price');
+        const qtyIdx = headers.findIndex(h => h.includes('qty') || h === 'quantity' || h === 'sold');
+        const totalCostIdx = headers.findIndex(h => h.includes('total cost') || h.includes('ext cost'));
+        const totalRetailIdx = headers.findIndex(h => h.includes('total retail') || h.includes('ext price') || h.includes('ext revenue') || h.includes('amount') || h.includes('revenue'));
+
+        if (costIdx === -1) {
+          setError('Could not find a "Unit Cost" or "Buy Price" column in the CSV. Please ensure your file has cost data.');
+          return;
+        }
+
         const parts = [];
         let skippedRows = 0;
-        
-        for (let i = 1; i < lines.length; i++) {
-          // Handle CSV parsing with quoted fields
-          const row = lines[i].match(/(".*?"|[^",\s]+)(?=\s*,|\s*$)/g);
-          if (!row) continue;
-          
-          const cleanRow = row.map(cell => cell.replace(/^"|"$/g, '').trim());
-          
-          // Validate row has expected number of columns (allow some flexibility for trailing commas)
-          if (cleanRow.length < Math.max(costIdx, retailIdx, qtyIdx, totalCostIdx, totalRetailIdx) + 1) {
+
+        // Start parsing from line AFTER the header row
+        for (let i = headerRowIndex + 1; i < lines.length; i++) {
+          // ROBUST CSV PARSER: Handles quoted fields, empty fields (,,), and special characters
+          const cleanRow = [];
+          let currentField = '';
+          let insideQuotes = false;
+          const line = lines[i];
+
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            const nextChar = line[j + 1];
+
+            if (char === '"') {
+              // Handle escaped quotes ("")
+              if (insideQuotes && nextChar === '"') {
+                currentField += '"';
+                j++; // Skip next quote
+              } else {
+                insideQuotes = !insideQuotes;
+              }
+            } else if (char === ',' && !insideQuotes) {
+              // End of field
+              cleanRow.push(currentField.trim());
+              currentField = '';
+            } else {
+              currentField += char;
+            }
+          }
+
+          // Push the last field
+          cleanRow.push(currentField.trim());
+
+          // Skip completely empty rows
+          if (cleanRow.length === 0 || cleanRow.every(cell => !cell)) {
             skippedRows++;
-            console.warn(`Skipping malformed row ${i}: column count mismatch (expected ${headers.length}, got ${cleanRow.length})`);
+            continue;
+          }
+
+          // Validate row has minimum required columns
+          const requiredColumns = Math.max(costIdx, retailIdx !== -1 ? retailIdx : 0, qtyIdx !== -1 ? qtyIdx : 0, totalCostIdx !== -1 ? totalCostIdx : 0, totalRetailIdx !== -1 ? totalRetailIdx : 0) + 1;
+
+          if (cleanRow.length < requiredColumns) {
+            skippedRows++;
             continue;
           }
           
@@ -164,11 +214,39 @@ export default function PriceMatrixOptimizer() {
           const unitCost = parseCurrency(cleanRow[costIdx]);
           const unitRetail = retailIdx !== -1 ? parseCurrency(cleanRow[retailIdx]) : 0;
           const qty = qtyIdx !== -1 ? parseCurrency(cleanRow[qtyIdx]) : 1;
-          const totalCost = totalCostIdx !== -1 ? parseCurrency(cleanRow[totalCostIdx]) : unitCost * qty;
-          const totalRetail = totalRetailIdx !== -1 ? parseCurrency(cleanRow[totalRetailIdx]) : unitRetail * qty;
-          
+
+          // SELF-HEALING LOGIC WITH VALIDATION: Check if parsed value is valid and reasonable
+          const csvTotalCost = totalCostIdx !== -1 ? parseCurrency(cleanRow[totalCostIdx]) : 0;
+          const calculatedTotalCost = unitCost * qty;
+
+          // Validate: If CSV total differs significantly from calculated (>50%), use calculated
+          let totalCost = calculatedTotalCost;
+          if (csvTotalCost > 0.01) {
+            const difference = Math.abs(csvTotalCost - calculatedTotalCost) / calculatedTotalCost;
+            if (difference < 0.5) {
+              // CSV total is close to calculated, trust it (allows for rounding/discounts)
+              totalCost = csvTotalCost;
+            }
+            // Otherwise use calculated value (CSV data is likely garbage)
+          }
+
+          const csvTotalRetail = totalRetailIdx !== -1 ? parseCurrency(cleanRow[totalRetailIdx]) : 0;
+          const calculatedTotalRetail = unitRetail * qty;
+
+          // Same validation for retail
+          let totalRetail = calculatedTotalRetail;
+          if (csvTotalRetail > 0.01) {
+            const difference = Math.abs(csvTotalRetail - calculatedTotalRetail) / calculatedTotalRetail;
+            if (difference < 0.5) {
+              totalRetail = csvTotalRetail;
+            }
+          }
+
+          // Skip zero-cost items (warranties, supplies)
           if (unitCost > 0) {
             parts.push({ unitCost, unitRetail, qty, totalCost, totalRetail });
+          } else {
+            skippedRows++;
           }
         }
         
@@ -227,62 +305,104 @@ export default function PriceMatrixOptimizer() {
   // Calculate optimization recommendations
   const calculateRecommendations = async () => {
     setIsAnalyzing(true);
-    
+
     // Calculate current totals
     const currentTotalProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
     const currentTotalRevenue = tierAnalysis.reduce((sum, t) => sum + t.totalRetail, 0);
     const currentTotalCost = tierAnalysis.reduce((sum, t) => sum + t.totalCost, 0);
-    
+
     // Calculate target profit
     let targetProfit;
     if (targetType === 'percent') {
+      // Percentage increase in profit
       targetProfit = currentTotalProfit * (1 + targetIncrease / 100);
+    } else if (targetType === 'margin') {
+      // Target margin percentage (e.g., "I want 50% margin")
+      const targetMarginDecimal = targetIncrease / 100;
+      const targetRevenue = currentTotalCost / (1 - targetMarginDecimal);
+      targetProfit = targetRevenue - currentTotalCost;
     } else {
+      // Dollar amount increase
       targetProfit = currentTotalProfit + targetIncrease;
     }
-    
+
     const profitGap = targetProfit - currentTotalProfit;
-    
-    // Smart optimization: distribute increases based on volume and current markup headroom
+
+    // FIXED ALGORITHM: Work with ACTUAL current multipliers, not matrix multipliers
+    // Calculate the actual current overall multiplier from real data
+    const currentActualOverallMultiplier = currentTotalCost > 0 ? (currentTotalRevenue / currentTotalCost) : 1;
+    const targetOverallMultiplier = currentTotalCost > 0 ? (targetProfit / currentTotalCost) + 1 : 1;
+    const multiplierIncreaseRatio = targetOverallMultiplier / currentActualOverallMultiplier;
+
+    console.log('DEBUG - Algorithm:', {
+      currentProfit: currentTotalProfit,
+      targetProfit,
+      currentActualOverallMultiplier,
+      targetOverallMultiplier,
+      multiplierIncreaseRatio
+    });
+
+    // Distribute increases intelligently across tiers
     const optimizedTiers = tierAnalysis.map(tier => {
-      // Weight factors
-      const volumeWeight = tier.revenueShare / 100;
-      const headroomWeight = 1 - (tier.grossProfit / 100); // More room to increase = higher weight
-      const combinedWeight = (volumeWeight * 0.7) + (headroomWeight * 0.3);
-      
-      // Calculate this tier's share of the profit increase
-      const tierProfitTarget = profitGap * combinedWeight;
-      
-      // Calculate new multiplier needed
-      let newMultiplier = tier.multiplier;
-      let newGrossProfit = tier.grossProfit;
-      let projectedProfit = tier.currentProfit;
-      
-      if (tier.totalCost > 0 && combinedWeight > 0) {
-        // New retail needed = current cost + current profit + tier's share of increase
-        const newTotalRetail = tier.totalCost + tier.currentProfit + tierProfitTarget;
-        const avgCost = tier.totalCost / Math.max(tier.totalQty, 1);
-        const newAvgRetail = newTotalRetail / Math.max(tier.totalQty, 1);
-        
-        if (avgCost > 0) {
-          newMultiplier = Math.min(newAvgRetail / avgCost, tier.multiplier * 1.25); // Cap at 25% increase
-          newMultiplier = Math.max(newMultiplier, tier.multiplier); // Don't decrease
-          newGrossProfit = Math.min(100 - (100 / newMultiplier), 95); // Cap at 95% margin
-          projectedProfit = tier.totalCost * (newMultiplier - 1);
-        }
+      if (tier.totalCost <= 0 || tier.totalRetail <= 0) {
+        return {
+          ...tier,
+          newMultiplier: tier.multiplier,
+          newGrossProfit: tier.grossProfit,
+          multiplierChange: 0,
+          marginChange: 0,
+          projectedProfit: 0,
+          impactScore: 0
+        };
       }
-      
-      const multiplierChange = newMultiplier - tier.multiplier;
+
+      // Calculate ACTUAL current multiplier for this tier (not matrix multiplier)
+      const currentActualMultiplier = tier.totalRetail / tier.totalCost;
+      const currentActualMargin = ((tier.totalRetail - tier.totalCost) / tier.totalRetail) * 100;
+
+      // Weight factors: Equal weighting for volume and headroom (50/50)
+      const volumeWeight = tier.revenueShare / 100;
+      const headroomWeight = 1 - (currentActualMargin / 100); // Lower ACTUAL margin = more headroom
+      const combinedWeight = (volumeWeight * 0.5) + (headroomWeight * 0.5);
+
+      // Calculate how much to increase THIS tier's ACTUAL multiplier
+      const baseIncrease = (multiplierIncreaseRatio - 1);
+      const weightedIncrease = baseIncrease * (0.5 + combinedWeight);
+
+      // Calculate new ACTUAL multiplier (not matrix multiplier)
+      let newActualMultiplier = currentActualMultiplier * (1 + weightedIncrease);
+
+      // Safety caps: Allow up to 3x increase from CURRENT ACTUAL
+      newActualMultiplier = Math.min(newActualMultiplier, currentActualMultiplier * 3);
+      newActualMultiplier = Math.max(newActualMultiplier, currentActualMultiplier); // Never decrease
+
+      // Calculate new gross profit % from new ACTUAL multiplier
+      let newGrossProfit = 100 - (100 / newActualMultiplier);
+      newGrossProfit = Math.min(newGrossProfit, 95); // Cap at 95% margin
+
+      // Recalculate multiplier from capped gross profit if needed
+      if (newGrossProfit >= 95) {
+        newActualMultiplier = 100 / (100 - 95);
+      }
+
+      // Calculate projected revenue and profit
+      const projectedRevenue = tier.totalCost * newActualMultiplier;
+      const projectedProfit = projectedRevenue - tier.totalCost;
+
+      // For display: Calculate what the NEW matrix multiplier should be
+      const newMatrixMultiplier = newActualMultiplier; // Recommendation is to update matrix to match new pricing
+
+      const multiplierChange = newMatrixMultiplier - tier.multiplier;
       const marginChange = newGrossProfit - tier.grossProfit;
-      
+
       return {
         ...tier,
-        newMultiplier: Math.round(newMultiplier * 100) / 100,
+        newMultiplier: Math.round(newMatrixMultiplier * 100) / 100,
         newGrossProfit: Math.round(newGrossProfit * 10) / 10,
         multiplierChange: Math.round(multiplierChange * 100) / 100,
         marginChange: Math.round(marginChange * 10) / 10,
         projectedProfit: Math.round(projectedProfit * 100) / 100,
-        impactScore: Math.abs(marginChange) * (100 - tier.revenueShare) / 100 // Lower is better
+        impactScore: Math.abs(marginChange) * (tier.revenueShare / 100)
       };
     });
     
@@ -306,28 +426,126 @@ export default function PriceMatrixOptimizer() {
   // Chart colors
   const COLORS = ['#0ea5e9', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6', '#f97316', '#6366f1', '#84cc16'];
 
-  // SAFE VERSION: Export logic is completely deleted for trial mode.
-  // Even if they hack IS_TRIAL_MODE, this function cannot generate a file.
+  // Export as CSV
   const exportCSV = () => {
-    alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the full Export functionality.");
+    if (IS_TRIAL_MODE) {
+      alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the full Export functionality.");
+      return;
+    }
 
-    // The actual CSV generation code is deleted from here.
-    // There is nothing for them to unlock.
+    if (!recommendations) return;
+
+    const headers = ['Min Cost', 'Max Cost', 'Current Multiplier', 'New Multiplier', 'Current GP%', 'New GP%', 'Change'];
+    const rows = recommendations.tiers.map(tier => [
+      tier.minCost.toFixed(2),
+      tier.maxCost === 999999 ? 'Maximum' : tier.maxCost.toFixed(2),
+      tier.multiplier.toFixed(2),
+      tier.newMultiplier.toFixed(2),
+      tier.grossProfit.toFixed(1),
+      tier.newGrossProfit.toFixed(1),
+      tier.multiplierChange > 0 ? `+${tier.multiplierChange.toFixed(2)}` : tier.multiplierChange.toFixed(2)
+    ]);
+    
+    const csvContent = [
+      '# Price Matrix Optimization Report',
+      `# Generated: ${new Date().toLocaleDateString()}`,
+      `# Current Profit: ${formatCurrency(recommendations.currentProfit)}`,
+      `# Projected Profit: ${formatCurrency(recommendations.projectedProfit)}`,
+      `# Increase: ${formatPercent(recommendations.percentIncrease)}`,
+      '',
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+    
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `price-matrix-optimized-${new Date().toISOString().split('T')[0]}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  // SAFE VERSION: Export logic is completely deleted for trial mode.
-  // Even if they hack IS_TRIAL_MODE, this function cannot generate a file.
+  // Export as formatted text report (for printing/PDF)
   const exportReport = () => {
-    alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the full Export functionality.");
+    if (IS_TRIAL_MODE) {
+      alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the full Export functionality.");
+      return;
+    }
 
-    // The actual report generation code is deleted from here.
-    // There is nothing for them to unlock.
+    if (!recommendations) return;
+
+    const report = `
+════════════════════════════════════════════════════════════════
+                    PRICE MATRIX OPTIMIZATION REPORT
+════════════════════════════════════════════════════════════════
+
+Generated: ${new Date().toLocaleString()}
+Data Source: ${fileName || 'Uploaded CSV'}
+Parts Analyzed: ${partsData.length}
+
+────────────────────────────────────────────────────────────────
+                         FINANCIAL SUMMARY
+────────────────────────────────────────────────────────────────
+
+  Current Profit:     ${formatCurrency(recommendations.currentProfit).padStart(12)}
+  Target Profit:      ${formatCurrency(recommendations.targetProfit).padStart(12)}
+  Projected Profit:   ${formatCurrency(recommendations.projectedProfit).padStart(12)}
+  ─────────────────────────────────────
+  Profit Increase:    ${formatCurrency(recommendations.profitIncrease).padStart(12)}  (+${formatPercent(recommendations.percentIncrease)})
+
+────────────────────────────────────────────────────────────────
+                    RECOMMENDED MATRIX CHANGES
+────────────────────────────────────────────────────────────────
+
+${recommendations.tiers.map(tier => `
+  Cost Range: $${tier.minCost.toFixed(2)} - ${tier.maxCost === 999999 ? 'Maximum' : '$' + tier.maxCost.toFixed(2)}
+  ├─ Current:     ${tier.multiplier.toFixed(2)}x  (${tier.grossProfit.toFixed(1)}% GP)
+  ├─ Recommended: ${tier.newMultiplier.toFixed(2)}x  (${tier.newGrossProfit.toFixed(1)}% GP)
+  ├─ Change:      ${tier.multiplierChange > 0 ? '+' : ''}${tier.multiplierChange.toFixed(2)}x
+  └─ Parts in tier: ${tier.partCount} (${tier.revenueShare.toFixed(1)}% of revenue)
+`).join('')}
+────────────────────────────────────────────────────────────────
+                      QUICK REFERENCE TABLE
+────────────────────────────────────────────────────────────────
+
+  COST RANGE              MULTIPLIER    GROSS PROFIT %
+  ─────────────────────────────────────────────────────
+${recommendations.tiers.map(tier => 
+  `  $${tier.minCost.toFixed(2).padEnd(8)} - ${(tier.maxCost === 999999 ? 'Max' : '$' + tier.maxCost.toFixed(2)).padEnd(10)}    ${tier.newMultiplier.toFixed(2)}x          ${tier.newGrossProfit.toFixed(1)}%`
+).join('\n')}
+
+════════════════════════════════════════════════════════════════
+  Copy the values above directly into your POS price matrix.
+════════════════════════════════════════════════════════════════
+`;
+
+    const blob = new Blob([report], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `price-matrix-report-${new Date().toISOString().split('T')[0]}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
-  // SAFE VERSION: Clipboard logic deleted for security
+  // Copy to clipboard function
   const copyToClipboard = () => {
-    alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the Copy functionality.");
-    // Actual copy logic is deleted so they cannot steal the data
+    if (IS_TRIAL_MODE) {
+      alert("🔒 DEMO MODE ACTIVE\n\nPlease contact the developer to unlock the Copy functionality.");
+      return;
+    }
+
+    if (!recommendations) return;
+
+    const tableText = recommendations.tiers.map(tier =>
+      `$${tier.minCost.toFixed(2)}-${tier.maxCost === 999999 ? 'Max' : '$' + tier.maxCost.toFixed(2)}\t${tier.newMultiplier.toFixed(2)}\t${tier.newGrossProfit.toFixed(1)}%`
+    ).join('\n');
+
+    const header = 'Cost Range\tMultiplier\tGross Profit %\n';
+    navigator.clipboard.writeText(header + tableText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   const [copied, setCopied] = useState(false);
@@ -646,20 +864,30 @@ export default function PriceMatrixOptimizer() {
               <div className="grid md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-slate-400 text-sm mb-2">Target Type</label>
-                  <div className="flex gap-3">
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       onClick={() => setTargetType('percent')}
-                      className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+                      className={`py-3 px-3 rounded-xl font-medium transition-all text-sm ${
                         targetType === 'percent'
                           ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/50'
                           : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
                       }`}
                     >
-                      % Increase
+                      % Growth
+                    </button>
+                    <button
+                      onClick={() => setTargetType('margin')}
+                      className={`py-3 px-3 rounded-xl font-medium transition-all text-sm ${
+                        targetType === 'margin'
+                          ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/50'
+                          : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                      }`}
+                    >
+                      Target Margin
                     </button>
                     <button
                       onClick={() => setTargetType('dollar')}
-                      className={`flex-1 py-3 px-4 rounded-xl font-medium transition-all ${
+                      className={`py-3 px-3 rounded-xl font-medium transition-all text-sm ${
                         targetType === 'dollar'
                           ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/50'
                           : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
@@ -672,7 +900,7 @@ export default function PriceMatrixOptimizer() {
                 
                 <div>
                   <label className="block text-slate-400 text-sm mb-2">
-                    {targetType === 'percent' ? 'Profit Increase %' : 'Additional Profit $'}
+                    {targetType === 'percent' ? 'Profit Increase %' : targetType === 'margin' ? 'Target Margin %' : 'Additional Profit $'}
                   </label>
                   <div className="relative">
                     <span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500">
@@ -686,7 +914,7 @@ export default function PriceMatrixOptimizer() {
                         targetType === 'dollar' ? 'pl-8 pr-4' : 'px-4'
                       }`}
                     />
-                    {targetType === 'percent' && (
+                    {(targetType === 'percent' || targetType === 'margin') && (
                       <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500">%</span>
                     )}
                   </div>
@@ -700,13 +928,34 @@ export default function PriceMatrixOptimizer() {
                     {formatCurrency(tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0))}
                   </span>
                 </div>
+                <div className="flex items-center justify-between mt-1">
+                  <span className="text-slate-400 text-sm">Current Margin:</span>
+                  <span className="text-cyan-400 font-semibold text-sm">
+                    {(() => {
+                      const currentProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
+                      const currentRevenue = tierAnalysis.reduce((sum, t) => sum + t.totalRetail, 0);
+                      const currentMargin = currentRevenue > 0 ? (currentProfit / currentRevenue * 100) : 0;
+                      return `${currentMargin.toFixed(1)}%`;
+                    })()}
+                  </span>
+                </div>
                 <div className="flex items-center justify-between mt-2">
                   <span className="text-slate-400">Target Profit:</span>
                   <span className="text-emerald-400 font-semibold">
                     {formatCurrency(
-                      targetType === 'percent'
-                        ? tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0) * (1 + targetIncrease / 100)
-                        : tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0) + targetIncrease
+                      (() => {
+                        const currentProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
+                        const currentCost = tierAnalysis.reduce((sum, t) => sum + t.totalCost, 0);
+                        if (targetType === 'percent') {
+                          return currentProfit * (1 + targetIncrease / 100);
+                        } else if (targetType === 'margin') {
+                          const targetMarginDecimal = targetIncrease / 100;
+                          const targetRevenue = currentCost / (1 - targetMarginDecimal);
+                          return targetRevenue - currentCost;
+                        } else {
+                          return currentProfit + targetIncrease;
+                        }
+                      })()
                     )}
                   </span>
                 </div>
