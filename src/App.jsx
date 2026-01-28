@@ -564,15 +564,11 @@ ${recommendations.tiers.map(tier =>
       <div className="max-w-6xl mx-auto mb-8">
         <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
           <div className="flex items-center gap-3">
-            {/* Minimal Logo Badge */}
-            <div className="flex items-center gap-2">
-              <div className="w-2 h-8 bg-gradient-to-b from-emerald-400 to-cyan-500 rounded-full"></div>
-              <div>
-                <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-                  Price Matrix Optimizer
-                </h1>
-                <p className="text-slate-500 text-xs mt-0.5">Intelligent pricing for auto parts</p>
-              </div>
+            <div>
+              <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+                Price Matrix Optimizer
+              </h1>
+              <p className="text-slate-500 text-xs mt-0.5">Intelligent pricing for auto parts</p>
             </div>
           </div>
 
@@ -622,10 +618,7 @@ ${recommendations.tiers.map(tier =>
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <h2 className="text-lg font-semibold text-white">Your Price Matrix</h2>
-                  <p className="text-slate-500 text-xs flex items-center gap-1 mt-1">
-                    <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
-                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                    </svg>
+                  <p className="text-slate-500 text-xs mt-1">
                     Auto-saved to browser
                   </p>
                 </div>
@@ -636,11 +629,8 @@ ${recommendations.tiers.map(tier =>
                         setMatrix(defaultMatrix);
                       }
                     }}
-                    className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-slate-400 rounded-lg hover:bg-slate-700 hover:text-slate-300 transition-colors text-sm"
+                    className="px-3 py-2 bg-slate-800 text-slate-400 rounded-lg hover:bg-slate-700 hover:text-slate-300 transition-colors text-sm"
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                    </svg>
                     Reset
                   </button>
                   <button
@@ -747,11 +737,6 @@ ${recommendations.tiers.map(tier =>
           <div className="space-y-6">
             <div className="bg-slate-900 rounded-2xl p-8 border border-slate-800">
               <div className="text-center">
-                <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-800/50 rounded-xl mx-auto mb-3 border border-slate-700/50">
-                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                </div>
                 <h2 className="text-base font-semibold text-white mb-2">Upload Parts Sales Data</h2>
                 <p className="text-slate-400 text-sm mb-6 max-w-md mx-auto">
                   Upload a CSV file with your parts sales data. Must include a "Unit Cost" column.
@@ -771,19 +756,15 @@ ${recommendations.tiers.map(tier =>
                 </label>
                 
                 {fileName && (
-                  <div className="mt-4 flex items-center justify-center gap-2 text-emerald-400">
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
+                  <div className="mt-4 text-center text-emerald-400">
                     <span>{fileName}</span>
-                    <span className="text-slate-500">({partsData.length} parts loaded)</span>
+                    <span className="text-slate-500 ml-2">({partsData.length} parts loaded)</span>
                   </div>
                 )}
 
                 {/* Add this Warning Block */}
                 {skippedCount > 0 && (
-                  <div className="mt-2 text-amber-400 text-sm bg-amber-500/10 px-3 py-2 rounded-lg border border-amber-500/20 flex items-center justify-center gap-2">
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                  <div className="mt-2 text-amber-400 text-sm bg-amber-500/10 px-3 py-2 rounded-lg border border-amber-500/20 text-center">
                     <span>Warning: {skippedCount} rows were skipped due to formatting errors.</span>
                   </div>
                 )}
@@ -937,6 +918,13 @@ ${recommendations.tiers.map(tier =>
                       <span className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-500">%</span>
                     )}
                   </div>
+
+                  {/* Helpful descriptions */}
+                  <p className="text-slate-500 text-xs mt-2">
+                    {targetType === 'percent' && 'Increase your total profit by this percentage (e.g., 10% means 10% more profit)'}
+                    {targetType === 'margin' && 'Set your target profit margin to exactly this percentage (must be HIGHER than current margin)'}
+                    {targetType === 'dollar' && 'Increase your total profit by this dollar amount'}
+                  </p>
                 </div>
               </div>
               
@@ -979,8 +967,27 @@ ${recommendations.tiers.map(tier =>
                   </span>
                 </div>
               </div>
+
+              {/* Warning: Target Margin Lower Than Current */}
+              {targetType === 'margin' && (() => {
+                const currentProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
+                const currentRevenue = tierAnalysis.reduce((sum, t) => sum + t.totalRetail, 0);
+                const currentMargin = currentRevenue > 0 ? (currentProfit / currentRevenue * 100) : 0;
+                return targetIncrease < currentMargin ? (
+                  <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                    <div className="flex items-start gap-3">
+                      <div className="text-amber-400 text-sm leading-relaxed">
+                        <strong className="block mb-1">⚠️ Warning: Target Margin Lower Than Current</strong>
+                        <p>Your current margin is <strong>{currentMargin.toFixed(1)}%</strong> but you're targeting <strong>{targetIncrease}%</strong>.</p>
+                        <p className="mt-2">This would require DECREASING prices, which the optimizer will not do. The result will show no changes.</p>
+                        <p className="mt-2"><strong>Did you mean:</strong> Use "% Growth" to increase profit by {targetIncrease}%?</p>
+                      </div>
+                    </div>
+                  </div>
+                ) : null;
+              })()}
             </div>
-            
+
             <div className="flex gap-4">
               <button
                 onClick={() => setStep(2)}
@@ -1039,21 +1046,7 @@ ${recommendations.tiers.map(tier =>
                     onClick={copyToClipboard}
                     className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 transition-colors text-sm"
                   >
-                    {copied ? (
-                      <>
-                        <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                        Copied!
-                      </>
-                    ) : (
-                      <>
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                        </svg>
-                        Copy
-                      </>
-                    )}
+                    {copied ? 'Copied!' : 'Copy'}
                   </button>
                 </div>
               </div>
@@ -1163,10 +1156,7 @@ ${recommendations.tiers.map(tier =>
 
             {/* Strategy Explanation */}
             <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-2xl p-6 border border-slate-700">
-              <h3 className="text-lg font-semibold text-white mb-3 flex items-center gap-2">
-                <svg className="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
+              <h3 className="text-lg font-semibold text-white mb-3">
                 Optimization Strategy
               </h3>
               <p className="text-slate-300 leading-relaxed">
@@ -1179,58 +1169,31 @@ ${recommendations.tiers.map(tier =>
 
             {/* Export Section */}
             <div className="bg-emerald-500/10 rounded-2xl p-5 border border-emerald-500/30">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-6 h-6 bg-emerald-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                  <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-white">Export Your New Matrix</h3>
-                  <p className="text-slate-400 text-xs">Download to update your POS system</p>
-                </div>
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-white">Export Your New Matrix</h3>
+                <p className="text-slate-400 text-xs mt-1">Download to update your POS system</p>
               </div>
               
               <div className="grid sm:grid-cols-3 gap-2">
                 <button
                   onClick={exportCSV}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-emerald-500 text-slate-950 text-sm font-medium rounded-lg hover:bg-emerald-400 transition-colors"
+                  className="px-3 py-2.5 bg-emerald-500 text-slate-950 text-sm font-medium rounded-lg hover:bg-emerald-400 transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
                   CSV
                 </button>
 
                 <button
                   onClick={exportReport}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
+                  className="px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
                   Report
                 </button>
 
                 <button
                   onClick={copyToClipboard}
-                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
+                  className="px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
                 >
-                  {copied ? (
-                    <>
-                      <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                      </svg>
-                      <span>Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                      </svg>
-                      <span>Copy</span>
-                    </>
-                  )}
+                  {copied ? 'Copied!' : 'Copy'}
                 </button>
               </div>
               
