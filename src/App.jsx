@@ -356,41 +356,45 @@ export default function PriceMatrixOptimizer() {
         };
       }
 
-      // Calculate ACTUAL current multiplier for this tier (not matrix multiplier)
+      // Calculate ACTUAL current multiplier for this tier
       const currentActualMultiplier = tier.totalRetail / tier.totalCost;
       const currentActualMargin = ((tier.totalRetail - tier.totalCost) / tier.totalRetail) * 100;
 
+      // Detect pricing gap: Is client underpricing vs their own matrix?
+      const pricingGap = tier.multiplier - currentActualMultiplier;
+      const isPricingBelowMatrix = pricingGap > 0.1; // Client charges less than their matrix
+
       // Weight factors: Equal weighting for volume and headroom (50/50)
       const volumeWeight = tier.revenueShare / 100;
-      const headroomWeight = 1 - (currentActualMargin / 100); // Lower ACTUAL margin = more headroom
+      const headroomWeight = 1 - (currentActualMargin / 100);
       const combinedWeight = (volumeWeight * 0.5) + (headroomWeight * 0.5);
 
-      // Calculate how much to increase THIS tier's ACTUAL multiplier
+      // Calculate percentage increase needed
       const baseIncrease = (multiplierIncreaseRatio - 1);
       const weightedIncrease = baseIncrease * (0.5 + combinedWeight);
 
-      // Calculate new ACTUAL multiplier (not matrix multiplier)
-      let newActualMultiplier = currentActualMultiplier * (1 + weightedIncrease);
+      // CRITICAL FIX: Apply increase to MATRIX, not ACTUAL
+      // This prevents recommending decreases when actual < matrix
+      let newMatrixMultiplier = tier.multiplier * (1 + weightedIncrease);
 
-      // Safety caps: Allow up to 3x increase from CURRENT ACTUAL
-      newActualMultiplier = Math.min(newActualMultiplier, currentActualMultiplier * 3);
-      newActualMultiplier = Math.max(newActualMultiplier, currentActualMultiplier); // Never decrease
+      // Safety caps
+      newMatrixMultiplier = Math.min(newMatrixMultiplier, tier.multiplier * 1.5); // Max 50% increase
+      newMatrixMultiplier = Math.max(newMatrixMultiplier, tier.multiplier); // NEVER decrease matrix
 
-      // Calculate new gross profit % from new ACTUAL multiplier
-      let newGrossProfit = 100 - (100 / newActualMultiplier);
+      // Calculate new gross profit %
+      let newGrossProfit = 100 - (100 / newMatrixMultiplier);
       newGrossProfit = Math.min(newGrossProfit, 95); // Cap at 95% margin
 
       // Recalculate multiplier from capped gross profit if needed
       if (newGrossProfit >= 95) {
-        newActualMultiplier = 100 / (100 - 95);
+        newMatrixMultiplier = 100 / (100 - 95);
       }
 
-      // Calculate projected revenue and profit
-      const projectedRevenue = tier.totalCost * newActualMultiplier;
+      // Calculate projected profit
+      // Assume if matrix increases by X%, actual pricing will also increase by X%
+      const projectedActualMultiplier = currentActualMultiplier * (newMatrixMultiplier / tier.multiplier);
+      const projectedRevenue = tier.totalCost * projectedActualMultiplier;
       const projectedProfit = projectedRevenue - tier.totalCost;
-
-      // For display: Calculate what the NEW matrix multiplier should be
-      const newMatrixMultiplier = newActualMultiplier; // Recommendation is to update matrix to match new pricing
 
       const multiplierChange = newMatrixMultiplier - tier.multiplier;
       const marginChange = newGrossProfit - tier.grossProfit;
@@ -402,7 +406,11 @@ export default function PriceMatrixOptimizer() {
         multiplierChange: Math.round(multiplierChange * 100) / 100,
         marginChange: Math.round(marginChange * 10) / 10,
         projectedProfit: Math.round(projectedProfit * 100) / 100,
-        impactScore: Math.abs(marginChange) * (tier.revenueShare / 100)
+        impactScore: Math.abs(marginChange) * (tier.revenueShare / 100),
+        // Add diagnostic info
+        actualMultiplier: Math.round(currentActualMultiplier * 100) / 100,
+        pricingGap: Math.round(pricingGap * 100) / 100,
+        isPricingBelowMatrix
       };
     });
     
@@ -552,44 +560,55 @@ ${recommendations.tiers.map(tier =>
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8 font-sans">
-      {/* Header */}
+      {/* Header - Minimal & Professional */}
       <div className="max-w-6xl mx-auto mb-8">
-        <div className="flex items-center gap-3 mb-2">
-          <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-cyan-500 rounded-lg flex items-center justify-center">
-            <svg className="w-6 h-6 text-slate-950" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-            </svg>
+        <div className="flex items-center justify-between mb-6 pb-4 border-b border-slate-800">
+          <div className="flex items-center gap-3">
+            {/* Minimal Logo Badge */}
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-8 bg-gradient-to-b from-emerald-400 to-cyan-500 rounded-full"></div>
+              <div>
+                <h1 className="text-xl font-bold tracking-tight bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
+                  Price Matrix Optimizer
+                </h1>
+                <p className="text-slate-500 text-xs mt-0.5">Intelligent pricing for auto parts</p>
+              </div>
+            </div>
           </div>
-          <div>
-            <h1 className="text-2xl font-bold bg-gradient-to-r from-emerald-400 to-cyan-400 bg-clip-text text-transparent">
-              Price Matrix Optimizer
-            </h1>
-            <p className="text-slate-400 text-sm">Intelligent markup optimization for auto parts</p>
-          </div>
+
+          {/* Trial Mode Badge */}
+          {IS_TRIAL_MODE && (
+            <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+              <div className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></div>
+              <span className="text-amber-400 text-xs font-medium">Demo Mode</span>
+            </div>
+          )}
         </div>
-        
-        {/* Progress Steps */}
-        <div className="flex items-center gap-2 mt-6 overflow-x-auto pb-2">
+
+        {/* Progress Steps - Minimal Design */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-2">
           {['Matrix Setup', 'Upload Data', 'Set Target', 'Results'].map((label, idx) => (
-            <div key={idx} className="flex items-center">
+            <div key={idx} className="flex items-center flex-shrink-0">
               <button
                 onClick={() => idx < step && setStep(idx + 1)}
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                   step === idx + 1
-                    ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/50'
+                    ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/40'
                     : step > idx + 1
-                    ? 'bg-slate-800 text-slate-300 hover:bg-slate-700 cursor-pointer'
-                    : 'bg-slate-900 text-slate-600 cursor-not-allowed'
+                    ? 'bg-slate-800/50 text-slate-400 hover:bg-slate-800 cursor-pointer'
+                    : 'bg-transparent text-slate-600 cursor-not-allowed'
                 }`}
               >
-                <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs ${
-                  step > idx + 1 ? 'bg-emerald-500 text-slate-950' : 'bg-slate-800'
+                <span className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                  step > idx + 1 ? 'bg-emerald-500 text-slate-950' : step === idx + 1 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-600'
                 }`}>
                   {step > idx + 1 ? '✓' : idx + 1}
                 </span>
                 <span className="whitespace-nowrap">{label}</span>
               </button>
-              {idx < 3 && <div className={`w-8 h-0.5 mx-1 ${step > idx + 1 ? 'bg-emerald-500' : 'bg-slate-800'}`} />}
+              {idx < 3 && (
+                <div className={`w-6 h-[2px] mx-1 ${step > idx + 1 ? 'bg-emerald-500' : 'bg-slate-800'}`} />
+              )}
             </div>
           ))}
         </div>
@@ -726,17 +745,17 @@ ${recommendations.tiers.map(tier =>
         {/* Step 2: Upload Data */}
         {step === 2 && (
           <div className="space-y-6">
-            <div className="bg-slate-900 rounded-2xl p-8 border border-slate-800 border-dashed">
+            <div className="bg-slate-900 rounded-2xl p-8 border border-slate-800">
               <div className="text-center">
-                <div className="w-16 h-16 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-800/50 rounded-xl mx-auto mb-3 border border-slate-700/50">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
                 </div>
-                <h2 className="text-lg font-semibold text-white mb-2">Upload Parts Sales Data</h2>
-                <p className="text-slate-400 text-sm mb-6">
-                  Upload a CSV file with your parts sales data. Must include a "Unit Cost" column.<br/>
-                  <span className="text-slate-500">Supports formatted values like $1,234.56</span>
+                <h2 className="text-base font-semibold text-white mb-2">Upload Parts Sales Data</h2>
+                <p className="text-slate-400 text-sm mb-6 max-w-md mx-auto">
+                  Upload a CSV file with your parts sales data. Must include a "Unit Cost" column.
+                  <span className="block text-slate-500 text-xs mt-1">Supports formatted values like $1,234.56</span>
                 </p>
                 
                 <label className="inline-block">
@@ -1151,65 +1170,65 @@ ${recommendations.tiers.map(tier =>
                 Optimization Strategy
               </h3>
               <p className="text-slate-300 leading-relaxed">
-                These recommendations are weighted based on two factors: <strong className="text-emerald-400">sales volume</strong> (tiers 
-                with more sales get larger adjustments since they have bigger impact) and <strong className="text-cyan-400">headroom</strong> (tiers 
-                with lower current margins can be increased more without hitting price sensitivity). Adjustments are capped at 25% 
+                These recommendations are weighted based on two factors: <strong className="text-emerald-400">sales volume</strong> (tiers
+                with more sales get larger adjustments since they have bigger impact) and <strong className="text-cyan-400">headroom</strong> (tiers
+                with lower current margins can be increased more without hitting price sensitivity). Adjustments are capped at 50%
                 per tier to minimize price shock on any individual part.
               </p>
             </div>
 
             {/* Export Section */}
-            <div className="bg-emerald-500/10 rounded-2xl p-6 border border-emerald-500/30">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 bg-emerald-500/20 rounded-xl flex items-center justify-center">
-                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="bg-emerald-500/10 rounded-2xl p-5 border border-emerald-500/30">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-6 h-6 bg-emerald-500/20 rounded-lg flex items-center justify-center flex-shrink-0">
+                  <svg className="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-white">Export Your New Matrix</h3>
-                  <p className="text-slate-400 text-sm">Download to update your POS system</p>
+                  <h3 className="text-sm font-semibold text-white">Export Your New Matrix</h3>
+                  <p className="text-slate-400 text-xs">Download to update your POS system</p>
                 </div>
               </div>
               
-              <div className="grid sm:grid-cols-3 gap-3">
+              <div className="grid sm:grid-cols-3 gap-2">
                 <button
                   onClick={exportCSV}
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-emerald-500 text-slate-950 font-semibold rounded-xl hover:bg-emerald-400 transition-colors"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-emerald-500 text-slate-950 text-sm font-medium rounded-lg hover:bg-emerald-400 transition-colors"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Download CSV
+                  CSV
                 </button>
-                
+
                 <button
                   onClick={exportReport}
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 text-white font-semibold rounded-xl hover:bg-slate-600 transition-colors"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  Full Report (.txt)
+                  Report
                 </button>
-                
+
                 <button
                   onClick={copyToClipboard}
-                  className="flex items-center justify-center gap-2 px-4 py-3 bg-slate-700 text-white font-semibold rounded-xl hover:bg-slate-600 transition-colors"
+                  className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-slate-700 text-white text-sm font-medium rounded-lg hover:bg-slate-600 transition-colors"
                 >
                   {copied ? (
                     <>
-                      <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                       </svg>
-                      Copied to Clipboard!
+                      <span>Copied!</span>
                     </>
                   ) : (
                     <>
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                       </svg>
-                      Copy to Clipboard
+                      <span>Copy</span>
                     </>
                   )}
                 </button>
