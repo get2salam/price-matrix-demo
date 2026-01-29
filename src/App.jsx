@@ -302,36 +302,30 @@ export default function PriceMatrixOptimizer() {
     setTierAnalysis(analysis);
   }, [matrix]);
 
-  // Calculate optimization recommendations
+  // Calculate optimization recommendations - WITH TARGET ENFORCER
   const calculateRecommendations = async () => {
     setIsAnalyzing(true);
 
-    // Calculate current totals
+    // 1. Calculate current totals
     const currentTotalProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
     const currentTotalRevenue = tierAnalysis.reduce((sum, t) => sum + t.totalRetail, 0);
     const currentTotalCost = tierAnalysis.reduce((sum, t) => sum + t.totalCost, 0);
 
-    // Calculate target profit
+    // 2. Calculate target profit
     let targetProfit;
     if (targetType === 'percent') {
-      // Percentage increase in profit
       targetProfit = currentTotalProfit * (1 + targetIncrease / 100);
     } else if (targetType === 'margin') {
-      // Target margin percentage (e.g., "I want 50% margin")
-      const targetMarginDecimal = targetIncrease / 100;
+      const targetMarginDecimal = Math.min(targetIncrease / 100, 0.95); // Cap margin at 95%
       const targetRevenue = currentTotalCost / (1 - targetMarginDecimal);
       targetProfit = targetRevenue - currentTotalCost;
     } else {
-      // Dollar amount increase
       targetProfit = currentTotalProfit + targetIncrease;
     }
 
-    const profitGap = targetProfit - currentTotalProfit;
-
-    // FIXED ALGORITHM: Work with ACTUAL current multipliers, not matrix multipliers
-    // Calculate the actual current overall multiplier from real data
+    // 3. Initial calculation (smart weighted distribution)
     const currentActualOverallMultiplier = currentTotalCost > 0 ? (currentTotalRevenue / currentTotalCost) : 1;
-    const targetOverallMultiplier = currentTotalCost > 0 ? (targetProfit / currentTotalCost) + 1 : 1;
+    const targetOverallMultiplier = currentTotalCost > 0 ? (1 + (targetProfit / currentTotalCost)) : 1;
     const multiplierIncreaseRatio = targetOverallMultiplier / currentActualOverallMultiplier;
 
     console.log('DEBUG - Algorithm:', {
@@ -342,8 +336,7 @@ export default function PriceMatrixOptimizer() {
       multiplierIncreaseRatio
     });
 
-    // Distribute increases intelligently across tiers
-    const optimizedTiers = tierAnalysis.map(tier => {
+    let optimizedTiers = tierAnalysis.map(tier => {
       if (tier.totalCost <= 0 || tier.totalRetail <= 0) {
         return {
           ...tier,
@@ -352,7 +345,8 @@ export default function PriceMatrixOptimizer() {
           multiplierChange: 0,
           marginChange: 0,
           projectedProfit: 0,
-          impactScore: 0
+          impactScore: 0,
+          currentActualMultiplier: tier.multiplier
         };
       }
 
@@ -360,73 +354,125 @@ export default function PriceMatrixOptimizer() {
       const currentActualMultiplier = tier.totalRetail / tier.totalCost;
       const currentActualMargin = ((tier.totalRetail - tier.totalCost) / tier.totalRetail) * 100;
 
-      // Detect pricing gap: Is client underpricing vs their own matrix?
-      const pricingGap = tier.multiplier - currentActualMultiplier;
-      const isPricingBelowMatrix = pricingGap > 0.1; // Client charges less than their matrix
-
-      // Weight factors: Equal weighting for volume and headroom (50/50)
+      // Weight factors: 60% volume, 40% headroom
       const volumeWeight = tier.revenueShare / 100;
       const headroomWeight = 1 - (currentActualMargin / 100);
-      const combinedWeight = (volumeWeight * 0.5) + (headroomWeight * 0.5);
+      const combinedWeight = (volumeWeight * 0.6) + (headroomWeight * 0.4);
 
       // Calculate percentage increase needed
       const baseIncrease = (multiplierIncreaseRatio - 1);
       const weightedIncrease = baseIncrease * (0.5 + combinedWeight);
 
-      // CRITICAL FIX: Apply increase to MATRIX, not ACTUAL
-      // This prevents recommending decreases when actual < matrix
+      // Apply increase to MATRIX (not actual)
       let newMatrixMultiplier = tier.multiplier * (1 + weightedIncrease);
 
       // Safety caps
+      newMatrixMultiplier = Math.max(newMatrixMultiplier, tier.multiplier); // NEVER decrease
       newMatrixMultiplier = Math.min(newMatrixMultiplier, tier.multiplier * 1.5); // Max 50% increase
-      newMatrixMultiplier = Math.max(newMatrixMultiplier, tier.multiplier); // NEVER decrease matrix
 
       // Calculate new gross profit %
       let newGrossProfit = 100 - (100 / newMatrixMultiplier);
-      newGrossProfit = Math.min(newGrossProfit, 95); // Cap at 95% margin
-
-      // Recalculate multiplier from capped gross profit if needed
-      if (newGrossProfit >= 95) {
-        newMatrixMultiplier = 100 / (100 - 95);
+      if (newGrossProfit > 95) {
+        newGrossProfit = 95;
+        newMatrixMultiplier = 20.0; // 95% GP = 20x multiplier
       }
 
       // Calculate projected profit
-      // Assume if matrix increases by X%, actual pricing will also increase by X%
-      const projectedActualMultiplier = currentActualMultiplier * (newMatrixMultiplier / tier.multiplier);
+      const actualSalesMultiplier = currentActualMultiplier;
+      const projectedActualMultiplier = actualSalesMultiplier * (newMatrixMultiplier / tier.multiplier);
       const projectedRevenue = tier.totalCost * projectedActualMultiplier;
       const projectedProfit = projectedRevenue - tier.totalCost;
 
-      const multiplierChange = newMatrixMultiplier - tier.multiplier;
-      const marginChange = newGrossProfit - tier.grossProfit;
+      return {
+        ...tier,
+        currentActualMultiplier,
+        newMultiplier: parseFloat(newMatrixMultiplier.toFixed(2)),
+        newGrossProfit: parseFloat(newGrossProfit.toFixed(1)),
+        projectedProfit: projectedProfit
+      };
+    });
+
+    // 4. TARGET ENFORCER - Iteratively nudge tiers until we hit the target
+    let projectedTotalProfit = optimizedTiers.reduce((sum, t) => sum + t.projectedProfit, 0);
+    let attempts = 0;
+    const MAX_ATTEMPTS = 20;
+    const TOLERANCE = 0.995; // Within 0.5% of target
+
+    console.log(`Initial projection: ${formatCurrency(projectedTotalProfit)} vs target: ${formatCurrency(targetProfit)}`);
+
+    while (projectedTotalProfit < targetProfit * TOLERANCE && attempts < MAX_ATTEMPTS) {
+      const shortfall = targetProfit - projectedTotalProfit;
+      console.log(`Attempt ${attempts + 1}: Shortfall = ${formatCurrency(shortfall)}`);
+
+      optimizedTiers = optimizedTiers.map(tier => {
+        if (tier.totalCost <= 0) return tier;
+
+        // Skip tiers that are already maxed out
+        const isAtMarginCap = tier.newGrossProfit >= 95;
+        const isAtIncreaseCap = tier.newMultiplier >= tier.multiplier * 1.5;
+        if (isAtMarginCap || isAtIncreaseCap) return tier;
+
+        // Nudge up by 0.5%
+        let nudge = tier.newMultiplier * 1.005;
+
+        // Re-check caps
+        nudge = Math.min(nudge, tier.multiplier * 1.5);
+        let gp = 100 - (100 / nudge);
+        if (gp > 95) {
+          gp = 95;
+          nudge = 20.0;
+        }
+
+        // Recalculate profit for this tier
+        const actualSalesMultiplier = tier.currentActualMultiplier;
+        const projectedActualMultiplier = actualSalesMultiplier * (nudge / tier.multiplier);
+        const projectedProfit = (tier.totalCost * projectedActualMultiplier) - tier.totalCost;
+
+        return {
+          ...tier,
+          newMultiplier: parseFloat(nudge.toFixed(2)),
+          newGrossProfit: parseFloat(gp.toFixed(1)),
+          projectedProfit: projectedProfit
+        };
+      });
+
+      projectedTotalProfit = optimizedTiers.reduce((sum, t) => sum + t.projectedProfit, 0);
+      attempts++;
+    }
+
+    console.log(`Final after ${attempts} iterations: ${formatCurrency(projectedTotalProfit)}`);
+
+    // 5. Final polish - add change calculations and diagnostics
+    const finalTiers = optimizedTiers.map(tier => {
+      const multiplierChange = tier.newMultiplier - tier.multiplier;
+      const marginChange = tier.newGrossProfit - tier.grossProfit;
+      const pricingGap = tier.multiplier - tier.currentActualMultiplier;
 
       return {
         ...tier,
-        newMultiplier: Math.round(newMatrixMultiplier * 100) / 100,
-        newGrossProfit: Math.round(newGrossProfit * 10) / 10,
+        newMultiplier: Math.round(tier.newMultiplier * 100) / 100,
+        newGrossProfit: Math.round(tier.newGrossProfit * 10) / 10,
         multiplierChange: Math.round(multiplierChange * 100) / 100,
         marginChange: Math.round(marginChange * 10) / 10,
-        projectedProfit: Math.round(projectedProfit * 100) / 100,
+        projectedProfit: Math.round(tier.projectedProfit * 100) / 100,
         impactScore: Math.abs(marginChange) * (tier.revenueShare / 100),
-        // Add diagnostic info
-        actualMultiplier: Math.round(currentActualMultiplier * 100) / 100,
+        actualMultiplier: Math.round(tier.currentActualMultiplier * 100) / 100,
         pricingGap: Math.round(pricingGap * 100) / 100,
-        isPricingBelowMatrix
+        isPricingBelowMatrix: pricingGap > 0.1
       };
     });
-    
-    const projectedTotalProfit = optimizedTiers.reduce((sum, t) => sum + t.projectedProfit, 0);
-    
+
     setRecommendations({
       currentProfit: currentTotalProfit,
       targetProfit,
       projectedProfit: projectedTotalProfit,
       profitIncrease: projectedTotalProfit - currentTotalProfit,
-      percentIncrease: ((projectedTotalProfit - currentTotalProfit) / currentTotalProfit) * 100,
-      tiers: optimizedTiers,
+      percentIncrease: currentTotalProfit > 0 ? ((projectedTotalProfit - currentTotalProfit) / currentTotalProfit) * 100 : 0,
+      tiers: finalTiers,
       currentRevenue: currentTotalRevenue,
       currentCost: currentTotalCost
     });
-    
+
     setIsAnalyzing(false);
     setStep(4);
   };
