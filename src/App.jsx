@@ -63,6 +63,9 @@ export default function PriceMatrixOptimizer() {
   const [error, setError] = useState('');
   const [skippedCount, setSkippedCount] = useState(0);
 
+  // NEW: State for manual tier overrides (Request #2)
+  const [lockedTiers, setLockedTiers] = useState({}); // { tierId: customMultiplier }
+
   // Save matrix to localStorage whenever it changes
   useEffect(() => {
     try {
@@ -346,13 +349,34 @@ export default function PriceMatrixOptimizer() {
           marginChange: 0,
           projectedProfit: 0,
           impactScore: 0,
-          currentActualMultiplier: tier.multiplier
+          currentActualMultiplier: tier.multiplier,
+          isLocked: false
         };
       }
 
       // Calculate ACTUAL current multiplier for this tier
       const currentActualMultiplier = tier.totalRetail / tier.totalCost;
       const currentActualMargin = ((tier.totalRetail - tier.totalCost) / tier.totalRetail) * 100;
+
+      // CHECK FOR MANUAL LOCK (Request #2: Editable Results)
+      if (lockedTiers[tier.id]) {
+        const lockedMultiplier = lockedTiers[tier.id];
+        const lockedGrossProfit = 100 - (100 / lockedMultiplier);
+
+        // Calculate projected profit with locked multiplier
+        const projectedActualMultiplier = currentActualMultiplier * (lockedMultiplier / tier.multiplier);
+        const projectedRevenue = tier.totalCost * projectedActualMultiplier;
+        const projectedProfit = projectedRevenue - tier.totalCost;
+
+        return {
+          ...tier,
+          currentActualMultiplier,
+          newMultiplier: lockedMultiplier,
+          newGrossProfit: parseFloat(lockedGrossProfit.toFixed(1)),
+          projectedProfit: projectedProfit,
+          isLocked: true
+        };
+      }
 
       // Weight factors: 60% volume, 40% headroom
       const volumeWeight = tier.revenueShare / 100;
@@ -388,7 +412,8 @@ export default function PriceMatrixOptimizer() {
         currentActualMultiplier,
         newMultiplier: parseFloat(newMatrixMultiplier.toFixed(2)),
         newGrossProfit: parseFloat(newGrossProfit.toFixed(1)),
-        projectedProfit: projectedProfit
+        projectedProfit: projectedProfit,
+        isLocked: false
       };
     });
 
@@ -406,6 +431,9 @@ export default function PriceMatrixOptimizer() {
 
       optimizedTiers = optimizedTiers.map(tier => {
         if (tier.totalCost <= 0) return tier;
+
+        // Skip locked tiers (user's manual overrides)
+        if (tier.isLocked) return tier;
 
         // Skip tiers that are already maxed out
         const isAtMarginCap = tier.newGrossProfit >= 95;
@@ -475,6 +503,36 @@ export default function PriceMatrixOptimizer() {
 
     setIsAnalyzing(false);
     setStep(4);
+  };
+
+  // Handle manual tier editing (Request #2: Editable Results)
+  const handleManualTierChange = (tierId, newMultiplierValue) => {
+    const val = parseFloat(newMultiplierValue);
+
+    // Validation: Must be between 1.01x and 20x
+    if (isNaN(val) || val < 1.01 || val > 20) {
+      console.warn(`Invalid multiplier value: ${newMultiplierValue}. Must be between 1.01 and 20.`);
+      return;
+    }
+
+    // Update locked tiers
+    const newLocks = { ...lockedTiers, [tierId]: val };
+    setLockedTiers(newLocks);
+
+    // Recalculate with the new lock
+    setIsAnalyzing(true);
+    setTimeout(() => {
+      calculateRecommendations();
+    }, 100); // Small delay to allow state to update
+  };
+
+  // Reset all manual edits
+  const resetAllEdits = () => {
+    setLockedTiers({});
+    setIsAnalyzing(true);
+    setTimeout(() => {
+      calculateRecommendations();
+    }, 100);
   };
 
   // Chart colors
@@ -856,7 +914,7 @@ ${recommendations.tiers.map(tier =>
                   </ResponsiveContainer>
                 </div>
                 
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
+                <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
                   <div className="bg-slate-800 rounded-xl p-4">
                     <div className="text-slate-400 text-sm">Total Parts</div>
                     <div className="text-2xl font-bold text-white">{partsData.length}</div>
@@ -877,6 +935,18 @@ ${recommendations.tiers.map(tier =>
                     <div className="text-slate-400 text-sm">Current Profit</div>
                     <div className="text-2xl font-bold text-emerald-400">
                       {formatCurrency(tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0))}
+                    </div>
+                  </div>
+                  {/* REQUEST #1: Current Profit Margin % */}
+                  <div className="bg-gradient-to-br from-emerald-500/10 to-cyan-500/10 rounded-xl p-4 border border-emerald-500/30">
+                    <div className="text-emerald-400 text-sm font-semibold">Current Margin %</div>
+                    <div className="text-2xl font-bold text-white">
+                      {(() => {
+                        const profit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
+                        const revenue = tierAnalysis.reduce((sum, t) => sum + t.totalRetail, 0);
+                        const margin = revenue > 0 ? (profit / revenue * 100) : 0;
+                        return `${margin.toFixed(1)}%`;
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1042,7 +1112,10 @@ ${recommendations.tiers.map(tier =>
                 ← Back
               </button>
               <button
-                onClick={calculateRecommendations}
+                onClick={() => {
+                  setLockedTiers({}); // Start fresh with no manual overrides
+                  calculateRecommendations();
+                }}
                 disabled={isAnalyzing}
                 className="flex-1 py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-semibold rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50"
               >
@@ -1086,8 +1159,19 @@ ${recommendations.tiers.map(tier =>
             {/* Recommended Matrix */}
             <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-semibold text-white">Recommended Matrix Adjustments</h2>
+                <div>
+                  <h2 className="text-lg font-semibold text-white">Recommended Matrix Adjustments</h2>
+                  <p className="text-xs text-slate-500 mt-1">💡 Click any "New Mult." value to edit it manually</p>
+                </div>
                 <div className="flex gap-2">
+                  {Object.keys(lockedTiers).length > 0 && (
+                    <button
+                      onClick={resetAllEdits}
+                      className="px-3 py-2 bg-amber-500/20 text-amber-400 text-sm rounded-lg hover:bg-amber-500/30 transition-colors border border-amber-500/30"
+                    >
+                      Reset Edits ({Object.keys(lockedTiers).length})
+                    </button>
+                  )}
                   <button
                     onClick={copyToClipboard}
                     className="flex items-center gap-2 px-3 py-2 bg-slate-800 text-slate-300 rounded-lg hover:bg-slate-700 transition-colors text-sm"
@@ -1126,8 +1210,33 @@ ${recommendations.tiers.map(tier =>
                         <td className="py-3 px-2 text-center text-slate-400">
                           {tier.multiplier.toFixed(2)}x
                         </td>
-                        <td className="py-3 px-2 text-center font-semibold text-white">
-                          {tier.newMultiplier.toFixed(2)}x
+                        {/* REQUEST #2: EDITABLE New Multiplier with Auto-Redistribution */}
+                        <td className="py-3 px-2 text-center">
+                          <div className="flex items-center justify-center gap-1">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="1.01"
+                              max="20"
+                              value={tier.newMultiplier}
+                              onBlur={(e) => handleManualTierChange(tier.id, e.target.value)}
+                              onKeyPress={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.target.blur();
+                                }
+                              }}
+                              className={`w-16 px-2 py-1 text-center font-bold rounded transition-all ${
+                                tier.isLocked
+                                  ? 'bg-amber-900/30 text-amber-400 border-2 border-amber-500/50 ring-2 ring-amber-500/20'
+                                  : 'bg-slate-800 text-emerald-400 border border-slate-700 focus:ring-2 focus:ring-emerald-500 hover:border-emerald-500/50'
+                              } outline-none`}
+                              title={tier.isLocked ? '🔒 Locked - Other tiers will adjust' : 'Click to edit'}
+                            />
+                            <span className="text-slate-500">×</span>
+                            {tier.isLocked && (
+                              <span className="text-amber-500 text-xs ml-1">🔒</span>
+                            )}
+                          </div>
                         </td>
                         <td className="py-3 px-2 text-center">
                           {tier.multiplierChange > 0 ? (
@@ -1261,6 +1370,7 @@ ${recommendations.tiers.map(tier =>
                   setRecommendations(null);
                   setPartsData([]);
                   setTierAnalysis([]);
+                  setLockedTiers({}); // Clear manual edits
                 }}
                 className="flex-1 py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-semibold rounded-xl hover:opacity-90 transition-opacity"
               >
