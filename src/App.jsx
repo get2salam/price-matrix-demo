@@ -1214,11 +1214,12 @@ ${recommendations.tiers.map(tier =>
                         <td className="py-3 px-2 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <input
+                              key={`${tier.id}-${tier.newMultiplier}`}
                               type="number"
                               step="0.01"
                               min="1.01"
                               max="20"
-                              value={tier.newMultiplier}
+                              defaultValue={tier.newMultiplier}
                               onBlur={(e) => handleManualTierChange(tier.id, e.target.value)}
                               onKeyPress={(e) => {
                                 if (e.key === 'Enter') {
