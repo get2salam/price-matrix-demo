@@ -66,6 +66,9 @@ export default function PriceMatrixOptimizer() {
   // NEW: State for manual tier overrides (Request #2)
   const [lockedTiers, setLockedTiers] = useState({}); // { tierId: customMultiplier }
 
+  // CRITICAL: Store original target profit to maintain it during manual edits
+  const [originalTargetProfit, setOriginalTargetProfit] = useState(null);
+
   // Save matrix to localStorage whenever it changes
   useEffect(() => {
     try {
@@ -312,8 +315,10 @@ export default function PriceMatrixOptimizer() {
 
     // Use override if provided, otherwise use state
     const effectiveLockedTiers = overrideLockedTiers !== null ? overrideLockedTiers : lockedTiers;
+    const isManualEdit = overrideLockedTiers !== null;
 
     console.log('🔧 calculateRecommendations called with locks:', effectiveLockedTiers);
+    console.log('🔧 isManualEdit:', isManualEdit);
 
     // 1. Calculate current totals
     const currentTotalProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
@@ -322,14 +327,27 @@ export default function PriceMatrixOptimizer() {
 
     // 2. Calculate target profit
     let targetProfit;
-    if (targetType === 'percent') {
-      targetProfit = currentTotalProfit * (1 + targetIncrease / 100);
-    } else if (targetType === 'margin') {
-      const targetMarginDecimal = Math.min(targetIncrease / 100, 0.95); // Cap margin at 95%
-      const targetRevenue = currentTotalCost / (1 - targetMarginDecimal);
-      targetProfit = targetRevenue - currentTotalCost;
+
+    if (isManualEdit && originalTargetProfit !== null) {
+      // CRITICAL FIX: When user manually edits, use the ORIGINAL target
+      // Don't recalculate it, or target will change!
+      targetProfit = originalTargetProfit;
+      console.log('🎯 Using ORIGINAL target (manual edit):', formatCurrency(targetProfit));
     } else {
-      targetProfit = currentTotalProfit + targetIncrease;
+      // First run: Calculate target based on user's input
+      if (targetType === 'percent') {
+        targetProfit = currentTotalProfit * (1 + targetIncrease / 100);
+      } else if (targetType === 'margin') {
+        const targetMarginDecimal = Math.min(targetIncrease / 100, 0.95); // Cap margin at 95%
+        const targetRevenue = currentTotalCost / (1 - targetMarginDecimal);
+        targetProfit = targetRevenue - currentTotalCost;
+      } else {
+        targetProfit = currentTotalProfit + targetIncrease;
+      }
+
+      // Store original target for future manual edits
+      setOriginalTargetProfit(targetProfit);
+      console.log('🎯 Calculated NEW target (first run):', formatCurrency(targetProfit));
     }
 
     // 3. Initial calculation (smart weighted distribution)
@@ -429,7 +447,7 @@ export default function PriceMatrixOptimizer() {
     // 4. TARGET ENFORCER - Iteratively nudge tiers until we hit the target
     let projectedTotalProfit = optimizedTiers.reduce((sum, t) => sum + t.projectedProfit, 0);
     let attempts = 0;
-    const MAX_ATTEMPTS = 20;
+    const MAX_ATTEMPTS = 50; // Set to 50 for complex scenarios with multiple locked tiers and caps
     const TOLERANCE = 0.005; // Within 0.5% of target (on either side)
 
     console.log(`📊 Initial projection: ${formatCurrency(projectedTotalProfit)} vs target: ${formatCurrency(targetProfit)}`);
@@ -441,7 +459,13 @@ export default function PriceMatrixOptimizer() {
       const lockedCount = optimizedTiers.filter(t => t.isLocked).length;
       const adjustableCount = optimizedTiers.filter(t => !t.isLocked && t.totalCost > 0).length;
 
-      console.log(`🎯 Iteration ${attempts + 1}: ${isUnder ? 'UNDER' : 'OVER'} by ${formatCurrency(Math.abs(gap))} | Locked: ${lockedCount} | Adjustable: ${adjustableCount}`);
+      // OPTIMIZATION: Dynamic step sizing based on gap magnitude
+      // If gap is huge (>5%), take bigger steps (1.5%) to converge faster
+      // If gap is small (<5%), take smaller steps (0.5%) for precision
+      const gapPercent = Math.abs(gap / targetProfit);
+      const stepSize = gapPercent > 0.05 ? 0.015 : 0.005;
+
+      console.log(`🎯 Iteration ${attempts + 1}: ${isUnder ? 'UNDER' : 'OVER'} by ${formatCurrency(Math.abs(gap))} (${(gapPercent * 100).toFixed(1)}%) | Step: ${(stepSize * 100).toFixed(1)}% | Locked: ${lockedCount} | Adjustable: ${adjustableCount}`);
 
       optimizedTiers = optimizedTiers.map(tier => {
         if (tier.totalCost <= 0) return tier;
@@ -463,13 +487,13 @@ export default function PriceMatrixOptimizer() {
           if (tier.newMultiplier <= tier.multiplier) return tier;
         }
 
-        // Nudge in the appropriate direction
+        // Nudge in the appropriate direction with DYNAMIC step size
         let nudge;
         if (isUnder) {
-          nudge = tier.newMultiplier * 1.005;  // +0.5% to increase profit
+          nudge = tier.newMultiplier * (1 + stepSize);  // Dynamic increase
           console.log(`  ↳ ⬆️ INCREASE: ${tier.costRange} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         } else {
-          nudge = tier.newMultiplier * 0.995;  // -0.5% to decrease profit
+          nudge = tier.newMultiplier * (1 - stepSize);  // Dynamic decrease
           console.log(`  ↳ ⬇️ DECREASE: ${tier.costRange} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         }
 
@@ -562,10 +586,21 @@ export default function PriceMatrixOptimizer() {
     calculateRecommendations(newLocks);
   };
 
+  // FIX: Helper to allow smooth typing without lag, and support Reset button
+  const handleTyping = (tierId, val) => {
+    setRecommendations(prev => ({
+      ...prev,
+      tiers: prev.tiers.map(t =>
+        t.id === tierId ? { ...t, newMultiplier: parseFloat(val) || t.newMultiplier } : t
+      )
+    }));
+  };
+
   // Reset all manual edits
   const resetAllEdits = () => {
     console.log('🔄 Resetting all manual edits');
     setLockedTiers({});
+    setOriginalTargetProfit(null); // Clear stored target to recalculate fresh
     // Pass empty object directly to avoid async state issue
     calculateRecommendations({});
   };
@@ -1149,6 +1184,7 @@ ${recommendations.tiers.map(tier =>
               <button
                 onClick={() => {
                   setLockedTiers({}); // Start fresh with no manual overrides
+                  setOriginalTargetProfit(null); // Clear stored target for fresh calculation
                   calculateRecommendations();
                 }}
                 disabled={isAnalyzing}
@@ -1249,12 +1285,13 @@ ${recommendations.tiers.map(tier =>
                         <td className="py-3 px-2 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <input
-                              key={`${tier.id}-${tier.newMultiplier}`}
+                              key={`${tier.id}-${tier.isLocked ? 'locked' : 'auto'}`}
                               type="number"
                               step="0.01"
                               min="1.01"
                               max="20"
-                              defaultValue={tier.newMultiplier}
+                              value={tier.newMultiplier}
+                              onChange={(e) => handleTyping(tier.id, e.target.value)}
                               onBlur={(e) => handleManualTierChange(tier.id, e.target.value)}
                               onKeyPress={(e) => {
                                 if (e.key === 'Enter') {
@@ -1407,6 +1444,7 @@ ${recommendations.tiers.map(tier =>
                   setPartsData([]);
                   setTierAnalysis([]);
                   setLockedTiers({}); // Clear manual edits
+                  setOriginalTargetProfit(null); // Clear stored target
                 }}
                 className="flex-1 py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-semibold rounded-xl hover:opacity-90 transition-opacity"
               >
