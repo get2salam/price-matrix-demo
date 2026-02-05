@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { Analytics } from "@vercel/analytics/react";
 
 // Default matrix based on the screenshot provided
 const defaultMatrix = [
@@ -1459,6 +1460,7 @@ ${recommendations.tiers.map(tier =>
       <div className="max-w-6xl mx-auto mt-12 text-center text-slate-600 text-sm">
         Price Matrix Optimizer • All calculations performed locally in your browser
       </div>
+      <Analytics />
     </div>
   );
 }
