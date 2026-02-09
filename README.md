@@ -1,16 +1,121 @@
-# React + Vite
+# 📊 Price Matrix Optimizer
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+An intelligent pricing optimization tool for parts-based businesses. Upload your sales data, define profit targets, and receive data-driven pricing recommendations — all running locally in your browser.
 
-Currently, two official plugins are available:
+![Price Matrix Optimizer](docs/screenshot-placeholder.png)
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+> _Replace the image above with an actual screenshot of the running application._
 
-## React Compiler
+---
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## ✨ Features
 
-## Expanding the ESLint configuration
+- **CSV Upload** — Import sales data from any POS system (Tekmetric, Shop-Ware, Mitchell, etc.)
+- **Customizable Price Matrix** — Define cost-range tiers with multipliers and gross profit targets
+- **Smart Tier Optimization** — Weighted algorithm balances sales volume and margin headroom
+- **Interactive Results** — Edit any recommended multiplier and watch other tiers auto-adjust
+- **Visual Charts** — Bar charts for parts distribution and multiplier comparisons (Recharts)
+- **Export Options** — Download optimized matrix as CSV, formatted report, or copy to clipboard
+- **Persistent Settings** — Matrix configuration auto-saves to browser localStorage
+- **Fully Client-Side** — No server, no data leaves your machine
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 🛠 Tech Stack
+
+| Layer       | Technology                          |
+| ----------- | ----------------------------------- |
+| Framework   | React 19                            |
+| Build Tool  | Vite 7                              |
+| Charts      | Recharts 3                          |
+| Styling     | Tailwind CSS 3                      |
+| Linting     | ESLint 9 with React Hooks plugin    |
+| Container   | Docker (Node 20 Alpine + Nginx)     |
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Node.js** ≥ 18
+- **npm** ≥ 9
+
+### Install & Run
+
+```bash
+# Clone the repository
+git clone https://github.com/get2salam/price-matrix-demo.git
+cd price-matrix-demo
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
+```
+
+The app will be available at **http://localhost:5173**.
+
+### Build for Production
+
+```bash
+npm run build
+npm run preview   # preview the production build locally
+```
+
+### Docker
+
+```bash
+# Build and run with Docker Compose
+docker compose up --build
+
+# Or manually
+docker build -t price-matrix-optimizer .
+docker run -p 8080:80 price-matrix-optimizer
+```
+
+The containerized app serves on **http://localhost:8080**.
+
+## 📖 How It Works
+
+1. **Define your price matrix** — Set cost-range tiers (e.g. $0–$1.50, $1.51–$6.00, …) with target multipliers and gross profit percentages.
+
+2. **Upload sales data** — Import a CSV export from your shop management system. The parser auto-detects header rows and handles currency-formatted values (`$1,234.56`).
+
+3. **Set a profit target** — Choose between percentage growth, target margin, or a fixed dollar increase.
+
+4. **Receive recommendations** — The optimizer distributes price adjustments across tiers using a weighted algorithm:
+   - **60% volume weight** — Tiers with higher revenue share receive proportionally larger adjustments (bigger impact).
+   - **40% headroom weight** — Tiers with lower current margins get more room to increase without hitting price sensitivity.
+   - **Safety caps** — No tier increases more than 50%, and gross profit is capped at 95%.
+   - **Convergence loop** — An iterative solver nudges multipliers until projected profit matches the target (within 0.5% tolerance).
+
+5. **Fine-tune & export** — Manually override any tier's multiplier; the optimizer redistributes the remaining tiers to still hit your target. Export the final matrix as CSV, a printable report, or copy directly to your clipboard.
+
+## 📁 Project Structure
+
+```
+├── src/
+│   ├── App.jsx          # Main application component
+│   ├── App.css          # Component styles
+│   ├── index.css        # Tailwind directives
+│   └── main.jsx         # React entry point
+├── public/              # Static assets
+├── Dockerfile           # Multi-stage Docker build
+├── docker-compose.yml   # Container orchestration
+├── tailwind.config.js   # Tailwind CSS configuration
+├── postcss.config.js    # PostCSS configuration
+├── vite.config.js       # Vite build configuration
+├── eslint.config.js     # ESLint flat config
+├── Makefile             # Common development commands
+└── package.json
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Commit your changes (`git commit -m 'feat: add my feature'`)
+4. Push to the branch (`git push origin feature/my-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE).
