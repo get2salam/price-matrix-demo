@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 // Default matrix based on the screenshot provided
@@ -44,7 +44,10 @@ export default function PriceMatrixOptimizer() {
       if (savedMatrix) {
         const parsed = JSON.parse(savedMatrix);
         // Validate it's an array with expected structure
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed[0].minCost !== undefined) {
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(t =>
+            typeof t.minCost === 'number' && typeof t.maxCost === 'number' &&
+            typeof t.multiplier === 'number' && t.multiplier > 0
+        )) {
           return parsed;
         }
       }
@@ -68,6 +71,11 @@ export default function PriceMatrixOptimizer() {
 
   // CRITICAL: Store original target profit to maintain it during manual edits
   const [originalTargetProfit, setOriginalTargetProfit] = useState(null);
+
+  // Ref to suppress onBlur during reset (Bug 10 fix)
+  const isResettingRef = useRef(false);
+
+  const [copied, setCopied] = useState(false);
 
   // Save matrix to localStorage whenever it changes
   useEffect(() => {
@@ -112,8 +120,10 @@ export default function PriceMatrixOptimizer() {
         const updated = { ...tier, [field]: parseFloat(value) || 0 };
         // Auto-calculate multiplier from gross profit or vice versa
         if (field === 'grossProfit') {
+          updated.grossProfit = Math.min(updated.grossProfit, 99.9); // Prevent division by zero
           updated.multiplier = 100 / (100 - updated.grossProfit);
         } else if (field === 'multiplier') {
+          updated.multiplier = Math.max(updated.multiplier, 0.01); // Prevent division by zero
           updated.grossProfit = 100 - (100 / updated.multiplier);
         }
         return updated;
@@ -133,8 +143,8 @@ export default function PriceMatrixOptimizer() {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const text = e.target.result;
-        const lines = text.split('\n').filter(line => line.trim());
+        const text = e.target.result.replace(/^\uFEFF/, ''); // Strip BOM
+        const lines = text.split(/\r?\n/).filter(line => line.trim()); // Handle \r\n and \n
 
         // --- HEADER SCANNER: Find the actual header row (may not be line 1) ---
         let headerRowIndex = -1;
@@ -227,7 +237,7 @@ export default function PriceMatrixOptimizer() {
 
           // Validate: If CSV total differs significantly from calculated (>50%), use calculated
           let totalCost = calculatedTotalCost;
-          if (csvTotalCost > 0.01) {
+          if (csvTotalCost > 0.01 && calculatedTotalCost > 0) {
             const difference = Math.abs(csvTotalCost - calculatedTotalCost) / calculatedTotalCost;
             if (difference < 0.5) {
               // CSV total is close to calculated, trust it (allows for rounding/discounts)
@@ -241,7 +251,7 @@ export default function PriceMatrixOptimizer() {
 
           // Same validation for retail
           let totalRetail = calculatedTotalRetail;
-          if (csvTotalRetail > 0.01) {
+          if (csvTotalRetail > 0.01 && calculatedTotalRetail > 0) {
             const difference = Math.abs(csvTotalRetail - calculatedTotalRetail) / calculatedTotalRetail;
             if (difference < 0.5) {
               totalRetail = csvTotalRetail;
@@ -310,12 +320,13 @@ export default function PriceMatrixOptimizer() {
 
   // Calculate optimization recommendations - WITH TARGET ENFORCER
   // overrideLockedTiers: Optional parameter to bypass async state issues
-  const calculateRecommendations = async (overrideLockedTiers = null) => {
+  const calculateRecommendations = (overrideLockedTiers = null, overrideOriginalTarget = undefined) => {
     setIsAnalyzing(true);
 
     // Use override if provided, otherwise use state
     const effectiveLockedTiers = overrideLockedTiers !== null ? overrideLockedTiers : lockedTiers;
-    const isManualEdit = overrideLockedTiers !== null;
+    const isManualEdit = overrideLockedTiers !== null && Object.keys(overrideLockedTiers).length > 0;
+    const effectiveOriginalTarget = overrideOriginalTarget !== undefined ? overrideOriginalTarget : originalTargetProfit;
 
     console.log('🔧 calculateRecommendations called with locks:', effectiveLockedTiers);
     console.log('🔧 isManualEdit:', isManualEdit);
@@ -328,10 +339,10 @@ export default function PriceMatrixOptimizer() {
     // 2. Calculate target profit
     let targetProfit;
 
-    if (isManualEdit && originalTargetProfit !== null) {
+    if (isManualEdit && effectiveOriginalTarget !== null) {
       // CRITICAL FIX: When user manually edits, use the ORIGINAL target
       // Don't recalculate it, or target will change!
-      targetProfit = originalTargetProfit;
+      targetProfit = effectiveOriginalTarget;
       console.log('🎯 Using ORIGINAL target (manual edit):', formatCurrency(targetProfit));
     } else {
       // First run: Calculate target based on user's input
@@ -343,6 +354,12 @@ export default function PriceMatrixOptimizer() {
         targetProfit = targetRevenue - currentTotalCost;
       } else {
         targetProfit = currentTotalProfit + targetIncrease;
+      }
+
+      // Guard against NaN/Infinity/negative targets
+      if (!isFinite(targetProfit) || targetProfit <= 0) {
+        targetProfit = currentTotalProfit * 1.05; // Fallback: 5% increase
+        console.warn('⚠️ Invalid target profit calculated, falling back to 5% increase');
       }
 
       // Store original target for future manual edits
@@ -388,10 +405,12 @@ export default function PriceMatrixOptimizer() {
         const lockedMultiplier = effectiveLockedTiers[tier.id];
         const lockedGrossProfit = 100 - (100 / lockedMultiplier);
 
-        console.log(`🔒 LOCKED TIER: ${tier.costRange} at ${lockedMultiplier.toFixed(2)}x`);
+        console.log(`🔒 LOCKED TIER: $${tier.minCost}-$${tier.maxCost} at ${lockedMultiplier.toFixed(2)}x`);
 
-        // Calculate projected profit with locked multiplier
-        const projectedActualMultiplier = currentActualMultiplier * (lockedMultiplier / tier.multiplier);
+        // Calculate projected profit with locked multiplier (guard division by zero)
+        const projectedActualMultiplier = tier.multiplier > 0
+          ? currentActualMultiplier * (lockedMultiplier / tier.multiplier)
+          : lockedMultiplier;
         const projectedRevenue = tier.totalCost * projectedActualMultiplier;
         const projectedProfit = projectedRevenue - tier.totalCost;
 
@@ -428,9 +447,11 @@ export default function PriceMatrixOptimizer() {
         newMatrixMultiplier = 20.0; // 95% GP = 20x multiplier
       }
 
-      // Calculate projected profit
+      // Calculate projected profit (guard division by zero)
       const actualSalesMultiplier = currentActualMultiplier;
-      const projectedActualMultiplier = actualSalesMultiplier * (newMatrixMultiplier / tier.multiplier);
+      const projectedActualMultiplier = tier.multiplier > 0
+        ? actualSalesMultiplier * (newMatrixMultiplier / tier.multiplier)
+        : newMatrixMultiplier;
       const projectedRevenue = tier.totalCost * projectedActualMultiplier;
       const projectedProfit = projectedRevenue - tier.totalCost;
 
@@ -453,11 +474,18 @@ export default function PriceMatrixOptimizer() {
     console.log(`📊 Initial projection: ${formatCurrency(projectedTotalProfit)} vs target: ${formatCurrency(targetProfit)}`);
 
     // CRITICAL FIX: Bidirectional loop - adjust UP or DOWN based on gap
-    while (Math.abs(projectedTotalProfit - targetProfit) > targetProfit * TOLERANCE && attempts < MAX_ATTEMPTS) {
+    const absoluteTolerance = Math.max(targetProfit * TOLERANCE, 0.01); // Prevent zero tolerance
+    while (Math.abs(projectedTotalProfit - targetProfit) > absoluteTolerance && attempts < MAX_ATTEMPTS) {
       const gap = targetProfit - projectedTotalProfit;
       const isUnder = gap > 0;
       const lockedCount = optimizedTiers.filter(t => t.isLocked).length;
       const adjustableCount = optimizedTiers.filter(t => !t.isLocked && t.totalCost > 0).length;
+
+      // Early exit if no tiers can be adjusted
+      if (adjustableCount === 0) {
+        console.log('⚠️ No adjustable tiers remaining — breaking enforcer loop');
+        break;
+      }
 
       // OPTIMIZATION: Dynamic step sizing based on gap magnitude
       // If gap is huge (>5%), take bigger steps (1.5%) to converge faster
@@ -472,7 +500,7 @@ export default function PriceMatrixOptimizer() {
 
         // Skip locked tiers (user's manual overrides)
         if (tier.isLocked) {
-          console.log(`  ↳ 🔒 SKIP: ${tier.costRange} (locked at ${tier.newMultiplier.toFixed(2)}x)`);
+          console.log(`  ↳ 🔒 SKIP: $${tier.minCost}-$${tier.maxCost} (locked at ${tier.newMultiplier.toFixed(2)}x)`);
           return tier;
         }
 
@@ -491,10 +519,10 @@ export default function PriceMatrixOptimizer() {
         let nudge;
         if (isUnder) {
           nudge = tier.newMultiplier * (1 + stepSize);  // Dynamic increase
-          console.log(`  ↳ ⬆️ INCREASE: ${tier.costRange} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
+          console.log(`  ↳ ⬆️ INCREASE: $${tier.minCost}-$${tier.maxCost} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         } else {
           nudge = tier.newMultiplier * (1 - stepSize);  // Dynamic decrease
-          console.log(`  ↳ ⬇️ DECREASE: ${tier.costRange} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
+          console.log(`  ↳ ⬇️ DECREASE: $${tier.minCost}-$${tier.maxCost} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         }
 
         // Apply safety caps
@@ -509,7 +537,9 @@ export default function PriceMatrixOptimizer() {
 
         // Recalculate profit for this tier
         const actualSalesMultiplier = tier.currentActualMultiplier;
-        const projectedActualMultiplier = actualSalesMultiplier * (nudge / tier.multiplier);
+        const projectedActualMultiplier = tier.multiplier > 0
+          ? actualSalesMultiplier * (nudge / tier.multiplier)
+          : nudge;
         const projectedProfit = (tier.totalCost * projectedActualMultiplier) - tier.totalCost;
 
         return {
@@ -566,6 +596,9 @@ export default function PriceMatrixOptimizer() {
 
   // Handle manual tier editing (Request #2: Editable Results)
   const handleManualTierChange = (tierId, newMultiplierValue) => {
+    // Skip if reset is in progress (prevents onBlur firing before reset completes)
+    if (isResettingRef.current) return;
+
     const val = parseFloat(newMultiplierValue);
 
     // Validation: Must be between 1.01x and 20x
@@ -574,10 +607,19 @@ export default function PriceMatrixOptimizer() {
       return;
     }
 
-    console.log(`✏️ User editing tier ${tierId}: ${newMultiplierValue}x`);
+    // Lower bound protection: prevent massive profit collapse (Bug 5)
+    const originalTier = matrix.find(t => t.id === tierId);
+    const minAllowed = originalTier ? Math.max(originalTier.multiplier * 0.5, 1.01) : 1.01;
+    const clampedVal = Math.max(val, minAllowed);
+
+    if (clampedVal !== val) {
+      console.warn(`⚠️ Multiplier ${val.toFixed(2)}x is below 50% of original (${originalTier.multiplier.toFixed(2)}x). Clamped to ${clampedVal.toFixed(2)}x.`);
+    }
+
+    console.log(`✏️ User editing tier ${tierId}: ${clampedVal}x`);
 
     // Update locked tiers
-    const newLocks = { ...lockedTiers, [tierId]: val };
+    const newLocks = { ...lockedTiers, [tierId]: clampedVal };
     setLockedTiers(newLocks);
 
     // CRITICAL FIX: Pass newLocks directly to avoid async state issue
@@ -588,21 +630,29 @@ export default function PriceMatrixOptimizer() {
 
   // FIX: Helper to allow smooth typing without lag, and support Reset button
   const handleTyping = (tierId, val) => {
+    const parsed = parseFloat(val);
     setRecommendations(prev => ({
       ...prev,
-      tiers: prev.tiers.map(t =>
-        t.id === tierId ? { ...t, newMultiplier: parseFloat(val) || t.newMultiplier } : t
-      )
+      tiers: prev.tiers.map(t => {
+        if (t.id !== tierId) return t;
+        const newMult = parsed || t.newMultiplier;
+        // Also update GP% so it stays in sync during typing (Bug 3 fix)
+        const newGP = newMult > 0 ? 100 - (100 / newMult) : t.newGrossProfit;
+        return { ...t, newMultiplier: newMult, newGrossProfit: parseFloat(newGP.toFixed(1)) };
+      })
     }));
   };
 
   // Reset all manual edits
   const resetAllEdits = () => {
     console.log('🔄 Resetting all manual edits');
+    isResettingRef.current = true; // Suppress onBlur firing during reset (Bug 10)
     setLockedTiers({});
     setOriginalTargetProfit(null); // Clear stored target to recalculate fresh
-    // Pass empty object directly to avoid async state issue
-    calculateRecommendations({});
+    // Pass empty locks AND null target directly to avoid stale state (Bug 1)
+    calculateRecommendations({}, null);
+    // Clear resetting flag after microtask (allows React to process)
+    setTimeout(() => { isResettingRef.current = false; }, 0);
   };
 
   // Chart colors
@@ -729,8 +779,6 @@ ${recommendations.tiers.map(tier =>
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
-
-  const [copied, setCopied] = useState(false);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white p-4 md:p-8 font-sans">
@@ -1185,7 +1233,7 @@ ${recommendations.tiers.map(tier =>
                 onClick={() => {
                   setLockedTiers({}); // Start fresh with no manual overrides
                   setOriginalTargetProfit(null); // Clear stored target for fresh calculation
-                  calculateRecommendations();
+                  calculateRecommendations({}, null); // Pass overrides to avoid stale state
                 }}
                 disabled={isAnalyzing}
                 className="flex-1 py-4 bg-gradient-to-r from-emerald-500 to-cyan-500 text-slate-950 font-semibold rounded-xl hover:opacity-90 transition-opacity disabled:opacity-50"
@@ -1293,7 +1341,7 @@ ${recommendations.tiers.map(tier =>
                               value={tier.newMultiplier}
                               onChange={(e) => handleTyping(tier.id, e.target.value)}
                               onBlur={(e) => handleManualTierChange(tier.id, e.target.value)}
-                              onKeyPress={(e) => {
+                              onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
                                   e.target.blur();
                                 }
