@@ -75,6 +75,9 @@ export default function PriceMatrixOptimizer() {
   // Ref to suppress onBlur during reset (Bug 10 fix)
   const isResettingRef = useRef(false);
 
+  // Bug 16: Ref to track partsData without causing re-render loops
+  const partsDataRef = useRef([]);
+
   const [copied, setCopied] = useState(false);
 
   // Save matrix to localStorage whenever it changes
@@ -85,6 +88,11 @@ export default function PriceMatrixOptimizer() {
       console.warn('Could not save matrix to localStorage:', e);
     }
   }, [matrix]);
+
+  // Bug 16: Keep partsData ref in sync
+  useEffect(() => {
+    partsDataRef.current = partsData;
+  }, [partsData]);
 
   // Add a new tier to the matrix
   const addTier = () => {
@@ -114,23 +122,68 @@ export default function PriceMatrixOptimizer() {
   };
 
   // Update a tier's values
+  // Bug 18: Don't recalculate GP if multiplier is invalid
+  // Bug 20: Clamp GP to [0, 99.9], multiplier to [1.01, 100]
   const updateTier = (id, field, value) => {
-    setMatrix(matrix.map(tier => {
-      if (tier.id === id) {
-        const updated = { ...tier, [field]: parseFloat(value) || 0 };
-        // Auto-calculate multiplier from gross profit or vice versa
-        if (field === 'grossProfit') {
-          updated.grossProfit = Math.min(updated.grossProfit, 99.9); // Prevent division by zero
-          updated.multiplier = 100 / (100 - updated.grossProfit);
-        } else if (field === 'multiplier') {
-          updated.multiplier = Math.max(updated.multiplier, 0.01); // Prevent division by zero
-          updated.grossProfit = 100 - (100 / updated.multiplier);
-        }
-        return updated;
+    setMatrix(prev => prev.map(tier => {
+      if (tier.id !== id) return tier;
+      const parsedValue = parseFloat(value);
+
+      if (field === 'grossProfit') {
+        // Bug 18: If value is NaN or invalid, keep previous values
+        if (isNaN(parsedValue)) return tier;
+        // Bug 20: Clamp GP to [0, 99.9]
+        const clampedGP = Math.max(0, Math.min(parsedValue, 99.9));
+        const newMultiplier = Math.max(1.01, 100 / (100 - clampedGP));
+        return { ...tier, grossProfit: clampedGP, multiplier: parseFloat(newMultiplier.toFixed(4)) };
+      } else if (field === 'multiplier') {
+        // Bug 18: If multiplier is NaN, <= 0, keep previous values
+        if (isNaN(parsedValue) || parsedValue <= 0) return tier;
+        // Bug 20: Clamp multiplier to [1.01, 100]
+        const clampedMult = Math.max(1.01, Math.min(parsedValue, 100));
+        // Bug 18: Ensure GP is never negative
+        const newGP = Math.max(0, 100 - (100 / clampedMult));
+        return { ...tier, multiplier: clampedMult, grossProfit: parseFloat(newGP.toFixed(1)) };
+      } else {
+        return { ...tier, [field]: parsedValue || 0 };
       }
-      return tier;
     }));
   };
+
+  // Bug 17: Auto-fix cost range gaps on blur — set next tier's minCost to current maxCost + 0.01
+  const handleMaxCostBlur = (id) => {
+    setMatrix(prev => {
+      const sorted = [...prev];
+      const tierIndex = sorted.findIndex(t => t.id === id);
+      if (tierIndex === -1 || tierIndex >= sorted.length - 1) return prev;
+      const currentMax = sorted[tierIndex].maxCost;
+      if (currentMax === 999999) return prev;
+      const nextMin = parseFloat((currentMax + 0.01).toFixed(2));
+      return sorted.map((tier, idx) => {
+        if (idx === tierIndex + 1 && tier.minCost !== nextMin) {
+          return { ...tier, minCost: nextMin };
+        }
+        return tier;
+      });
+    });
+  };
+
+  // Bug 17: Detect cost range gaps and overlaps
+  const rangeIssues = React.useMemo(() => {
+    const issues = [];
+    for (let i = 0; i < matrix.length - 1; i++) {
+      const current = matrix[i];
+      const next = matrix[i + 1];
+      if (current.maxCost === 999999) continue;
+      const gap = next.minCost - current.maxCost;
+      if (gap > 0.02) {
+        issues.push({ type: 'gap', from: i + 1, to: i + 2, range: `$${current.maxCost.toFixed(2)} to $${next.minCost.toFixed(2)}` });
+      } else if (gap < -0.001) {
+        issues.push({ type: 'overlap', from: i + 1, to: i + 2, range: `$${next.minCost.toFixed(2)} to $${current.maxCost.toFixed(2)}` });
+      }
+    }
+    return issues;
+  }, [matrix]);
 
   // Parse CSV file
   const handleFileUpload = (event) => {
@@ -289,9 +342,18 @@ export default function PriceMatrixOptimizer() {
   };
 
   // Analyze parts by tier
+  // Bug 17: Dedup logic — each part assigned to the FIRST matching tier only
   const analyzeTiers = useCallback((parts) => {
+    const assignedIndices = new Set();
     const analysis = matrix.map(tier => {
-      const tierParts = parts.filter(p => p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost);
+      const tierParts = parts.filter((p, idx) => {
+        if (assignedIndices.has(idx)) return false; // Bug 17: Already assigned to earlier tier
+        if (p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost) {
+          assignedIndices.add(idx);
+          return true;
+        }
+        return false;
+      });
       const totalCost = tierParts.reduce((sum, p) => sum + p.totalCost, 0);
       const totalRetail = tierParts.reduce((sum, p) => sum + p.totalRetail, 0);
       const totalQty = tierParts.reduce((sum, p) => sum + p.qty, 0);
@@ -317,6 +379,14 @@ export default function PriceMatrixOptimizer() {
     
     setTierAnalysis(analysis);
   }, [matrix]);
+
+  // Bug 16: Re-run tier analysis when matrix changes and parts data exists
+  useEffect(() => {
+    if (partsDataRef.current.length > 0) {
+      analyzeTiers(partsDataRef.current);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matrix, analyzeTiers]);
 
   // Calculate optimization recommendations - WITH TARGET ENFORCER
   // overrideLockedTiers: Optional parameter to bypass async state issues
@@ -894,28 +964,37 @@ ${recommendations.tiers.map(tier =>
                               value={tier.maxCost === 999999 ? '' : tier.maxCost}
                               placeholder="Max"
                               onChange={(e) => updateTier(tier.id, 'maxCost', e.target.value || 999999)}
+                              onBlur={() => handleMaxCostBlur(tier.id)}
                               className="w-24 bg-slate-800 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500 outline-none"
                               step="0.01"
                             />
                           </div>
                         </td>
                         <td className="py-3 px-2">
+                          {/* Bug 19: Use defaultValue + onBlur to prevent decimal typing frustration */}
                           <input
                             type="number"
-                            value={tier.multiplier}
-                            onChange={(e) => updateTier(tier.id, 'multiplier', e.target.value)}
+                            key={`mult-${tier.id}-${tier.grossProfit}`}
+                            defaultValue={tier.multiplier}
+                            onBlur={(e) => updateTier(tier.id, 'multiplier', e.target.value)}
                             className="w-20 bg-slate-800 rounded-lg px-3 py-2 text-white text-center focus:ring-2 focus:ring-emerald-500 outline-none"
                             step="0.01"
+                            min="1.01"
+                            max="100"
                           />
                         </td>
                         <td className="py-3 px-2">
                           <div className="flex items-center justify-center gap-1">
+                            {/* Bug 19: Use defaultValue + onBlur to prevent decimal typing frustration */}
                             <input
                               type="number"
-                              value={Math.round(tier.grossProfit * 10) / 10}
-                              onChange={(e) => updateTier(tier.id, 'grossProfit', e.target.value)}
+                              key={`gp-${tier.id}-${tier.multiplier}`}
+                              defaultValue={Math.round(tier.grossProfit * 10) / 10}
+                              onBlur={(e) => updateTier(tier.id, 'grossProfit', e.target.value)}
                               className="w-20 bg-slate-800 rounded-lg px-3 py-2 text-white text-center focus:ring-2 focus:ring-emerald-500 outline-none"
                               step="0.1"
+                              min="0"
+                              max="99.9"
                             />
                             <span className="text-slate-500">%</span>
                           </div>
@@ -940,6 +1019,22 @@ ${recommendations.tiers.map(tier =>
                 </table>
               </div>
               
+              {/* Bug 17: Warning banner for cost range gaps/overlaps */}
+              {rangeIssues.length > 0 && (
+                <div className="mt-4 p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl">
+                  <div className="text-amber-400 text-sm font-semibold mb-1">⚠️ Cost Range Issues Detected</div>
+                  {rangeIssues.map((issue, i) => (
+                    <div key={i} className="text-amber-300 text-xs mt-1">
+                      {issue.type === 'gap' 
+                        ? `Gap between Tier ${issue.from} and Tier ${issue.to}: ${issue.range} — parts in this range won't be categorized`
+                        : `Overlap between Tier ${issue.from} and Tier ${issue.to}: ${issue.range} — parts may be double-counted`
+                      }
+                    </div>
+                  ))}
+                  <div className="text-slate-400 text-xs mt-2">Tip: Edit the Max Cost of a tier — the next tier's Min Cost will auto-adjust on blur.</div>
+                </div>
+              )}
+
               <p className="text-slate-500 text-sm mt-4">
                 Tip: Edit the Gross Profit % and the Multiplier will auto-calculate, or vice versa. Your matrix is automatically saved and will persist even if you close the browser.
               </p>
@@ -1330,16 +1425,16 @@ ${recommendations.tiers.map(tier =>
                           {tier.multiplier.toFixed(2)}x
                         </td>
                         {/* REQUEST #2: EDITABLE New Multiplier with Auto-Redistribution */}
+                        {/* Bug 19: Use defaultValue + onBlur to prevent decimal typing frustration */}
                         <td className="py-3 px-2 text-center">
                           <div className="flex items-center justify-center gap-1">
                             <input
-                              key={`${tier.id}-${tier.isLocked ? 'locked' : 'auto'}`}
+                              key={`${tier.id}-${tier.isLocked ? 'locked' : 'auto'}-${tier.newMultiplier}`}
                               type="number"
                               step="0.01"
                               min="1.01"
                               max="20"
-                              value={tier.newMultiplier}
-                              onChange={(e) => handleTyping(tier.id, e.target.value)}
+                              defaultValue={tier.newMultiplier}
                               onBlur={(e) => handleManualTierChange(tier.id, e.target.value)}
                               onKeyDown={(e) => {
                                 if (e.key === 'Enter') {
