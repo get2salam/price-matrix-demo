@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 // Default matrix based on the screenshot provided
@@ -28,6 +28,41 @@ const parseCurrency = (str) => {
   const cleanStr = str.toString().replace(/[^0-9.-]+/g, "");
   return parseFloat(cleanStr) || 0;
 };
+
+// Pure function: compute tier analysis from parts + matrix (no side effects)
+function computeTierAnalysis(parts, matrix) {
+  const assignedIndices = new Set();
+  const analysis = matrix.map(tier => {
+    const tierParts = parts.filter((p, idx) => {
+      if (assignedIndices.has(idx)) return false;
+      if (p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost) {
+        assignedIndices.add(idx);
+        return true;
+      }
+      return false;
+    });
+    const totalCost = tierParts.reduce((sum, p) => sum + p.totalCost, 0);
+    const totalRetail = tierParts.reduce((sum, p) => sum + p.totalRetail, 0);
+    const totalQty = tierParts.reduce((sum, p) => sum + p.qty, 0);
+    const currentMargin = totalRetail > 0 ? ((totalRetail - totalCost) / totalRetail) * 100 : 0;
+    const currentProfit = totalRetail - totalCost;
+    return {
+      ...tier,
+      partCount: tierParts.length,
+      totalQty,
+      totalCost,
+      totalRetail,
+      currentMargin,
+      currentProfit,
+      revenueShare: 0,
+    };
+  });
+  const totalRevenue = analysis.reduce((sum, t) => sum + t.totalRetail, 0);
+  analysis.forEach(tier => {
+    tier.revenueShare = totalRevenue > 0 ? (tier.totalRetail / totalRevenue) * 100 : 0;
+  });
+  return analysis;
+}
 
 export default function PriceMatrixOptimizer() {
   // --- SECURITY: TRIAL MODE SWITCH ---
@@ -341,52 +376,18 @@ export default function PriceMatrixOptimizer() {
     reader.readAsText(file);
   };
 
-  // Analyze parts by tier
+  // Analyze parts by tier — delegates to pure module-level computeTierAnalysis
   // Bug 17: Dedup logic — each part assigned to the FIRST matching tier only
-  const analyzeTiers = useCallback((parts) => {
-    const assignedIndices = new Set();
-    const analysis = matrix.map(tier => {
-      const tierParts = parts.filter((p, idx) => {
-        if (assignedIndices.has(idx)) return false; // Bug 17: Already assigned to earlier tier
-        if (p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost) {
-          assignedIndices.add(idx);
-          return true;
-        }
-        return false;
-      });
-      const totalCost = tierParts.reduce((sum, p) => sum + p.totalCost, 0);
-      const totalRetail = tierParts.reduce((sum, p) => sum + p.totalRetail, 0);
-      const totalQty = tierParts.reduce((sum, p) => sum + p.qty, 0);
-      const currentMargin = totalRetail > 0 ? ((totalRetail - totalCost) / totalRetail) * 100 : 0;
-      const currentProfit = totalRetail - totalCost;
-      
-      return {
-        ...tier,
-        partCount: tierParts.length,
-        totalQty,
-        totalCost,
-        totalRetail,
-        currentMargin,
-        currentProfit,
-        revenueShare: 0 // Will be calculated after
-      };
-    });
-    
-    const totalRevenue = analysis.reduce((sum, t) => sum + t.totalRetail, 0);
-    analysis.forEach(tier => {
-      tier.revenueShare = totalRevenue > 0 ? (tier.totalRetail / totalRevenue) * 100 : 0;
-    });
-    
-    setTierAnalysis(analysis);
-  }, [matrix]);
+  const analyzeTiers = (parts) => {
+    setTierAnalysis(computeTierAnalysis(parts, matrix));
+  };
 
   // Bug 16: Re-run tier analysis when matrix changes and parts data exists
   useEffect(() => {
     if (partsDataRef.current.length > 0) {
-      analyzeTiers(partsDataRef.current);
+      setTierAnalysis(computeTierAnalysis(partsDataRef.current, matrix));
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [matrix, analyzeTiers]);
+  }, [matrix]);
 
   // Calculate optimization recommendations - WITH TARGET ENFORCER
   // overrideLockedTiers: Optional parameter to bypass async state issues
@@ -699,7 +700,7 @@ export default function PriceMatrixOptimizer() {
   };
 
   // FIX: Helper to allow smooth typing without lag, and support Reset button
-  const handleTyping = (tierId, val) => {
+  const _handleTyping = (tierId, val) => {
     const parsed = parseFloat(val);
     setRecommendations(prev => ({
       ...prev,
@@ -947,7 +948,7 @@ ${recommendations.tiers.map(tier =>
                     </tr>
                   </thead>
                   <tbody>
-                    {matrix.map((tier, idx) => (
+                    {matrix.map((tier) => (
                       <tr key={tier.id} className="border-t border-slate-800">
                         <td className="py-3 px-2">
                           <div className="flex items-center gap-2">
