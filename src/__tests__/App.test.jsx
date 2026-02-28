@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import PriceMatrixOptimizer from '../App';
 
@@ -144,14 +144,6 @@ describe('Test 1: Basic CSV upload and analysis', () => {
     render(<PriceMatrixOptimizer />);
     await uploadCSV(REAL_CSV);
 
-    // Calculate expected totals
-    let expectedCost = 0, expectedRevenue = 0;
-    REAL_AUTO_PARTS.forEach(p => {
-      expectedCost += p.unitCost * p.qty;
-      expectedRevenue += p.unitRetail * p.qty;
-    });
-    const expectedProfit = expectedRevenue - expectedCost;
-
     // The summary cards should show these values
     // Check that profit is positive and displayed
     const profitElements = screen.getAllByText(/^\$/);
@@ -249,7 +241,6 @@ describe('Test 3: Manual multiplier editing', () => {
     expect(multInputs.length).toBeGreaterThan(0);
 
     const firstInput = multInputs[0];
-    const originalValue = firstInput.defaultValue || firstInput.value;
 
     // Edit it: clear and type a new value, then blur
     fireEvent.focus(firstInput);
