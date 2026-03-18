@@ -65,10 +65,7 @@ function computeTierAnalysis(parts, matrix) {
 }
 
 export default function PriceMatrixOptimizer() {
-  // --- SECURITY: TRIAL MODE SWITCH ---
-  // Set this to TRUE before sending the sample link.
-  // Set this to FALSE after you receive payment.
-  const IS_TRIAL_MODE = true;
+  const IS_TRIAL_MODE = false;
 
   const [step, setStep] = useState(1);
   
@@ -87,7 +84,6 @@ export default function PriceMatrixOptimizer() {
         }
       }
     } catch (e) {
-      console.warn('Could not load saved matrix:', e);
     }
     return defaultMatrix;
   });
@@ -120,7 +116,6 @@ export default function PriceMatrixOptimizer() {
     try {
       localStorage.setItem('priceMatrix', JSON.stringify(matrix));
     } catch (e) {
-      console.warn('Could not save matrix to localStorage:', e);
     }
   }, [matrix]);
 
@@ -363,7 +358,6 @@ export default function PriceMatrixOptimizer() {
         setSkippedCount(skippedRows);
 
         if (skippedRows > 0) {
-          console.warn(`Skipped ${skippedRows} invalid rows`);
         }
 
         setPartsData(parts);
@@ -399,8 +393,6 @@ export default function PriceMatrixOptimizer() {
     const isManualEdit = overrideLockedTiers !== null && Object.keys(overrideLockedTiers).length > 0;
     const effectiveOriginalTarget = overrideOriginalTarget !== undefined ? overrideOriginalTarget : originalTargetProfit;
 
-    console.log('🔧 calculateRecommendations called with locks:', effectiveLockedTiers);
-    console.log('🔧 isManualEdit:', isManualEdit);
 
     // 1. Calculate current totals
     const currentTotalProfit = tierAnalysis.reduce((sum, t) => sum + t.currentProfit, 0);
@@ -414,7 +406,6 @@ export default function PriceMatrixOptimizer() {
       // CRITICAL FIX: When user manually edits, use the ORIGINAL target
       // Don't recalculate it, or target will change!
       targetProfit = effectiveOriginalTarget;
-      console.log('🎯 Using ORIGINAL target (manual edit):', formatCurrency(targetProfit));
     } else {
       // First run: Calculate target based on user's input
       if (targetType === 'percent') {
@@ -430,27 +421,16 @@ export default function PriceMatrixOptimizer() {
       // Guard against NaN/Infinity/negative targets
       if (!isFinite(targetProfit) || targetProfit <= 0) {
         targetProfit = currentTotalProfit * 1.05; // Fallback: 5% increase
-        console.warn('⚠️ Invalid target profit calculated, falling back to 5% increase');
       }
 
       // Store original target for future manual edits
       setOriginalTargetProfit(targetProfit);
-      console.log('🎯 Calculated NEW target (first run):', formatCurrency(targetProfit));
     }
 
     // 3. Initial calculation (smart weighted distribution)
     const currentActualOverallMultiplier = currentTotalCost > 0 ? (currentTotalRevenue / currentTotalCost) : 1;
     const targetOverallMultiplier = currentTotalCost > 0 ? (1 + (targetProfit / currentTotalCost)) : 1;
     const multiplierIncreaseRatio = targetOverallMultiplier / currentActualOverallMultiplier;
-
-    console.log('🎯 DEBUG - Algorithm:', {
-      currentProfit: currentTotalProfit,
-      targetProfit,
-      currentActualOverallMultiplier,
-      targetOverallMultiplier,
-      multiplierIncreaseRatio,
-      lockedTiersCount: Object.keys(effectiveLockedTiers).length
-    });
 
     let optimizedTiers = tierAnalysis.map(tier => {
       if (tier.totalCost <= 0 || tier.totalRetail <= 0) {
@@ -476,7 +456,6 @@ export default function PriceMatrixOptimizer() {
         const lockedMultiplier = effectiveLockedTiers[tier.id];
         const lockedGrossProfit = 100 - (100 / lockedMultiplier);
 
-        console.log(`🔒 LOCKED TIER: $${tier.minCost}-$${tier.maxCost} at ${lockedMultiplier.toFixed(2)}x`);
 
         // Calculate projected profit with locked multiplier (guard division by zero)
         const projectedActualMultiplier = tier.multiplier > 0
@@ -542,7 +521,6 @@ export default function PriceMatrixOptimizer() {
     const MAX_ATTEMPTS = 50; // Set to 50 for complex scenarios with multiple locked tiers and caps
     const TOLERANCE = 0.005; // Within 0.5% of target (on either side)
 
-    console.log(`📊 Initial projection: ${formatCurrency(projectedTotalProfit)} vs target: ${formatCurrency(targetProfit)}`);
 
     // CRITICAL FIX: Bidirectional loop - adjust UP or DOWN based on gap
     const absoluteTolerance = Math.max(targetProfit * TOLERANCE, 0.01); // Prevent zero tolerance
@@ -554,7 +532,6 @@ export default function PriceMatrixOptimizer() {
 
       // Early exit if no tiers can be adjusted
       if (adjustableCount === 0) {
-        console.log('⚠️ No adjustable tiers remaining — breaking enforcer loop');
         break;
       }
 
@@ -564,14 +541,12 @@ export default function PriceMatrixOptimizer() {
       const gapPercent = Math.abs(gap / targetProfit);
       const stepSize = gapPercent > 0.05 ? 0.015 : 0.005;
 
-      console.log(`🎯 Iteration ${attempts + 1}: ${isUnder ? 'UNDER' : 'OVER'} by ${formatCurrency(Math.abs(gap))} (${(gapPercent * 100).toFixed(1)}%) | Step: ${(stepSize * 100).toFixed(1)}% | Locked: ${lockedCount} | Adjustable: ${adjustableCount}`);
 
       optimizedTiers = optimizedTiers.map(tier => {
         if (tier.totalCost <= 0) return tier;
 
         // Skip locked tiers (user's manual overrides)
         if (tier.isLocked) {
-          console.log(`  ↳ 🔒 SKIP: $${tier.minCost}-$${tier.maxCost} (locked at ${tier.newMultiplier.toFixed(2)}x)`);
           return tier;
         }
 
@@ -590,10 +565,8 @@ export default function PriceMatrixOptimizer() {
         let nudge;
         if (isUnder) {
           nudge = tier.newMultiplier * (1 + stepSize);  // Dynamic increase
-          console.log(`  ↳ ⬆️ INCREASE: $${tier.minCost}-$${tier.maxCost} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         } else {
           nudge = tier.newMultiplier * (1 - stepSize);  // Dynamic decrease
-          console.log(`  ↳ ⬇️ DECREASE: $${tier.minCost}-$${tier.maxCost} ${tier.newMultiplier.toFixed(2)}x → ${nudge.toFixed(2)}x`);
         }
 
         // Apply safety caps
@@ -627,8 +600,6 @@ export default function PriceMatrixOptimizer() {
 
     const finalGap = targetProfit - projectedTotalProfit;
     const gapPercent = (Math.abs(finalGap) / targetProfit * 100).toFixed(2);
-    console.log(`✅ Converged after ${attempts} iterations`);
-    console.log(`   Final: ${formatCurrency(projectedTotalProfit)} | Target: ${formatCurrency(targetProfit)} | Gap: ${formatCurrency(Math.abs(finalGap))} (${gapPercent}%)`);
 
     // 5. Final polish - add change calculations and diagnostics
     const finalTiers = optimizedTiers.map(tier => {
@@ -674,7 +645,6 @@ export default function PriceMatrixOptimizer() {
 
     // Validation: Must be between 1.01x and 20x
     if (isNaN(val) || val < 1.01 || val > 20) {
-      console.warn(`❌ Invalid multiplier value: ${newMultiplierValue}. Must be between 1.01 and 20.`);
       return;
     }
 
@@ -684,10 +654,8 @@ export default function PriceMatrixOptimizer() {
     const clampedVal = Math.max(val, minAllowed);
 
     if (clampedVal !== val) {
-      console.warn(`⚠️ Multiplier ${val.toFixed(2)}x is below 50% of original (${originalTier.multiplier.toFixed(2)}x). Clamped to ${clampedVal.toFixed(2)}x.`);
     }
 
-    console.log(`✏️ User editing tier ${tierId}: ${clampedVal}x`);
 
     // Update locked tiers
     const newLocks = { ...lockedTiers, [tierId]: clampedVal };
@@ -695,7 +663,6 @@ export default function PriceMatrixOptimizer() {
 
     // CRITICAL FIX: Pass newLocks directly to avoid async state issue
     // React state updates are async, so we can't rely on lockedTiers being updated
-    console.log('🔄 Recalculating with new locks:', newLocks);
     calculateRecommendations(newLocks);
   };
 
@@ -716,7 +683,6 @@ export default function PriceMatrixOptimizer() {
 
   // Reset all manual edits
   const resetAllEdits = () => {
-    console.log('🔄 Resetting all manual edits');
     isResettingRef.current = true; // Suppress onBlur firing during reset (Bug 10)
     setLockedTiers({});
     setOriginalTargetProfit(null); // Clear stored target to recalculate fresh

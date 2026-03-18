@@ -62,6 +62,7 @@ function createCSVFile(csvString, filename = 'parts-data.csv') {
 
 /**
  * Upload a CSV file to the app by simulating file input change.
+ * Waits for FileReader async callback to complete before returning.
  */
 async function uploadCSV(csvString, filename = 'parts-data.csv') {
   const file = createCSVFile(csvString, filename);
@@ -72,6 +73,13 @@ async function uploadCSV(csvString, filename = 'parts-data.csv') {
   // Upload file
   const fileInput = document.querySelector('input[type="file"]');
   await userEvent.upload(fileInput, file);
+
+  // Wait for FileReader async callback to finish and update state
+  await waitFor(() => {
+    const partsText = screen.queryByText(/\d+ parts loaded/);
+    expect(partsText).toBeInTheDocument();
+  });
+
   return file;
 }
 
@@ -658,41 +666,4 @@ describe('Integration: Full workflow end-to-end', () => {
   });
 });
 
-// ─── Export functionality (Trial Mode) ──────────────────────────────────────
-
-describe('Export functionality in trial mode', () => {
-  it('should show demo mode alert for CSV export', async () => {
-    render(<PriceMatrixOptimizer />);
-    await uploadCSV(REAL_CSV);
-    navigateToTarget();
-    setTarget(10);
-    generateRecommendations();
-
-    // Mock window.alert
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    // Click CSV export
-    const csvBtn = screen.getByText('CSV');
-    fireEvent.click(csvBtn);
-
-    expect(alertMock).toHaveBeenCalledWith(expect.stringContaining('DEMO MODE'));
-    alertMock.mockRestore();
-  });
-
-  it('should show demo mode alert for copy to clipboard', async () => {
-    render(<PriceMatrixOptimizer />);
-    await uploadCSV(REAL_CSV);
-    navigateToTarget();
-    setTarget(10);
-    generateRecommendations();
-
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    // Click Copy button (first one in the header area)
-    const copyBtns = screen.getAllByText('Copy');
-    fireEvent.click(copyBtns[0]);
-
-    expect(alertMock).toHaveBeenCalledWith(expect.stringContaining('DEMO MODE'));
-    alertMock.mockRestore();
-  });
-});
+// Trial mode tests removed — app delivered unlocked to client
