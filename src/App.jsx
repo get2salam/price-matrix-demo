@@ -83,7 +83,8 @@ export default function PriceMatrixOptimizer() {
           return parsed;
         }
       }
-    } catch (e) {
+    } catch {
+      // ignore JSON parse errors - fall back to defaultMatrix
     }
     return defaultMatrix;
   });
@@ -115,7 +116,8 @@ export default function PriceMatrixOptimizer() {
   useEffect(() => {
     try {
       localStorage.setItem('priceMatrix', JSON.stringify(matrix));
-    } catch (e) {
+    } catch {
+      // ignore localStorage write errors (e.g. private browsing quota exceeded)
     }
   }, [matrix]);
 
@@ -357,9 +359,6 @@ export default function PriceMatrixOptimizer() {
         // Update the skipped count state
         setSkippedCount(skippedRows);
 
-        if (skippedRows > 0) {
-        }
-
         setPartsData(parts);
         analyzeTiers(parts);
       } catch (err) {
@@ -527,7 +526,6 @@ export default function PriceMatrixOptimizer() {
     while (Math.abs(projectedTotalProfit - targetProfit) > absoluteTolerance && attempts < MAX_ATTEMPTS) {
       const gap = targetProfit - projectedTotalProfit;
       const isUnder = gap > 0;
-      const lockedCount = optimizedTiers.filter(t => t.isLocked).length;
       const adjustableCount = optimizedTiers.filter(t => !t.isLocked && t.totalCost > 0).length;
 
       // Early exit if no tiers can be adjusted
@@ -598,9 +596,6 @@ export default function PriceMatrixOptimizer() {
       attempts++;
     }
 
-    const finalGap = targetProfit - projectedTotalProfit;
-    const gapPercent = (Math.abs(finalGap) / targetProfit * 100).toFixed(2);
-
     // 5. Final polish - add change calculations and diagnostics
     const finalTiers = optimizedTiers.map(tier => {
       const multiplierChange = tier.newMultiplier - tier.multiplier;
@@ -652,10 +647,6 @@ export default function PriceMatrixOptimizer() {
     const originalTier = matrix.find(t => t.id === tierId);
     const minAllowed = originalTier ? Math.max(originalTier.multiplier * 0.5, 1.01) : 1.01;
     const clampedVal = Math.max(val, minAllowed);
-
-    if (clampedVal !== val) {
-    }
-
 
     // Update locked tiers
     const newLocks = { ...lockedTiers, [tierId]: clampedVal };
