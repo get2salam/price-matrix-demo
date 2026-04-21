@@ -1,6 +1,6 @@
 # 📊 Price Matrix Optimizer
 
-An intelligent pricing optimization tool for parts-based businesses. Upload your sales data, define profit targets, and receive data-driven pricing recommendations — all running locally in your browser.
+A browser-based pricing workflow for parts-heavy businesses. Upload sales data, test margin targets, review tier-by-tier recommendations, and export a cleaner matrix without sending business data to a server.
 
 ![Price Matrix Optimizer](docs/price-matrix-preview.svg)
 
@@ -8,14 +8,14 @@ An intelligent pricing optimization tool for parts-based businesses. Upload your
 
 ## ✨ Features
 
-- **CSV Upload** — Import sales data from any POS system (Tekmetric, Shop-Ware, Mitchell, etc.)
-- **Customizable Price Matrix** — Define cost-range tiers with multipliers and gross profit targets
-- **Smart Tier Optimization** — Weighted algorithm balances sales volume and margin headroom
-- **Interactive Results** — Edit any recommended multiplier and watch other tiers auto-adjust
-- **Visual Charts** — Bar charts for parts distribution and multiplier comparisons (Recharts)
-- **Export Options** — Download optimized matrix as CSV, formatted report, or copy to clipboard
-- **Persistent Settings** — Matrix configuration auto-saves to browser localStorage
-- **Fully Client-Side** — No server, no data leaves your machine
+- **Flexible CSV intake** — Import POS exports with auto-detected headers and currency-formatted values
+- **Sample file included** — Try the flow instantly with `public/sample-parts-data.csv`
+- **Editable price matrix** — Tune ranges, multipliers, and gross profit targets directly in the UI
+- **Matrix health checks** — Spot gaps, overlaps, tier counts, and open-ended ranges before running analysis
+- **Quick target presets** — Jump to common growth, margin, or dollar-profit goals
+- **Interactive recommendations** — Lock manual overrides and let the rest of the tiers rebalance
+- **Export-ready output** — Download CSV, generate a text report, or copy the results into your POS workflow
+- **Local-first workflow** — Saved settings stay in browser storage and shop data never leaves the machine
 
 ## 🛠 Tech Stack
 
@@ -58,6 +58,14 @@ npm run build
 npm run preview   # preview the production build locally
 ```
 
+### Quality Check
+
+```bash
+npm run check
+```
+
+This runs linting, tests, and a production build in one command.
+
 ### Docker
 
 ```bash
@@ -75,7 +83,7 @@ The containerized app serves on **http://localhost:8080**.
 
 1. **Define your price matrix** — Set cost-range tiers (e.g. $0–$1.50, $1.51–$6.00, …) with target multipliers and gross profit percentages.
 
-2. **Upload sales data** — Import a CSV export from your shop management system. The parser auto-detects header rows and handles currency-formatted values (`$1,234.56`).
+2. **Upload sales data** — Import a CSV export from your shop management system, or start with the included sample CSV. The parser auto-detects header rows and handles currency-formatted values (`$1,234.56`).
 
 3. **Set a profit target** — Choose between percentage growth, target margin, or a fixed dollar increase.
 
@@ -90,17 +98,16 @@ The containerized app serves on **http://localhost:8080**.
 ## 📁 Project Structure
 
 ```
+├── docs/                # README visuals
+├── public/              # Static assets and sample CSV
 ├── src/
+│   ├── components/      # UI building blocks, including lazy-loaded charts
+│   ├── utils/           # Parser and pricing helpers
+│   ├── __tests__/       # Vitest coverage for parser, math, and app flows
 │   ├── App.jsx          # Main application component
-│   ├── App.css          # Component styles
-│   ├── index.css        # Tailwind directives
 │   └── main.jsx         # React entry point
-├── public/              # Static assets
 ├── Dockerfile           # Multi-stage Docker build
 ├── docker-compose.yml   # Container orchestration
-├── tailwind.config.js   # Tailwind CSS configuration
-├── postcss.config.js    # PostCSS configuration
-├── vite.config.js       # Vite build configuration
 ├── eslint.config.js     # ESLint flat config
 ├── Makefile             # Common development commands
 └── package.json
