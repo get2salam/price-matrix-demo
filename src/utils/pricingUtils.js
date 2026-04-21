@@ -148,6 +148,38 @@ export function detectRangeIssues(matrix) {
 }
 
 /**
+ * Build a quick matrix health summary for the setup screen.
+ *
+ * @param {Array<{minCost: number, maxCost: number, multiplier: number, grossProfit: number}>} matrix
+ * @returns {{
+ *   tierCount: number,
+ *   issueCount: number,
+ *   averageMultiplier: number,
+ *   averageGrossProfit: number,
+ *   highestOpenRangeStart: number|null,
+ *   hasOpenEndedTier: boolean,
+ * }}
+ */
+export function computeMatrixSummary(matrix) {
+  const tierCount = matrix.length;
+  const issueCount = detectRangeIssues(matrix).length;
+  const averageMultiplier =
+    tierCount > 0 ? matrix.reduce((sum, tier) => sum + tier.multiplier, 0) / tierCount : 0;
+  const averageGrossProfit =
+    tierCount > 0 ? matrix.reduce((sum, tier) => sum + tier.grossProfit, 0) / tierCount : 0;
+  const openEndedTier = matrix.find((tier) => tier.maxCost === 999999) ?? null;
+
+  return {
+    tierCount,
+    issueCount,
+    averageMultiplier,
+    averageGrossProfit,
+    highestOpenRangeStart: openEndedTier ? openEndedTier.minCost : null,
+    hasOpenEndedTier: Boolean(openEndedTier),
+  };
+}
+
+/**
  * Assign parts to matrix tiers and compute aggregate statistics per tier.
  *
  * Each part is assigned to the **first** matching tier only (dedup logic).

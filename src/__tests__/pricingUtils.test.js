@@ -16,6 +16,7 @@ import {
   clampMultiplier,
   clampGP,
   detectRangeIssues,
+  computeMatrixSummary,
   computeTierAnalysis,
   computeOverallMargin,
   computeTargetProfit,
@@ -277,6 +278,33 @@ describe('detectRangeIssues', () => {
       { id: 2, minCost: 1000, maxCost: 2000, multiplier: 2.0, grossProfit: 50 }, // after open-ended
     ];
     expect(detectRangeIssues(openEndedThen)).toHaveLength(0);
+  });
+});
+
+// ─── computeMatrixSummary ───────────────────────────────────────────────────
+
+describe('computeMatrixSummary', () => {
+  it('summarises a healthy matrix', () => {
+    const summary = computeMatrixSummary([
+      { id: 1, minCost: 0, maxCost: 10, multiplier: 4, grossProfit: 75 },
+      { id: 2, minCost: 10.01, maxCost: 999999, multiplier: 2.5, grossProfit: 60 },
+    ]);
+
+    expect(summary.tierCount).toBe(2);
+    expect(summary.issueCount).toBe(0);
+    expect(summary.averageMultiplier).toBeCloseTo(3.25, 2);
+    expect(summary.averageGrossProfit).toBeCloseTo(67.5, 2);
+    expect(summary.hasOpenEndedTier).toBe(true);
+    expect(summary.highestOpenRangeStart).toBe(10.01);
+  });
+
+  it('counts range issues in the summary', () => {
+    const summary = computeMatrixSummary([
+      { id: 1, minCost: 0, maxCost: 10, multiplier: 4, grossProfit: 75 },
+      { id: 2, minCost: 12, maxCost: 999999, multiplier: 2.5, grossProfit: 60 },
+    ]);
+
+    expect(summary.issueCount).toBe(1);
   });
 });
 

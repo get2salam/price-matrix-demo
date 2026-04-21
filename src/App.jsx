@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { parseCSV } from './utils/csvParser';
-import { computeTierAnalysis, detectRangeIssues, formatCurrency, formatPercent } from './utils/pricingUtils';
+import { computeMatrixSummary, computeTierAnalysis, detectRangeIssues, formatCurrency, formatPercent } from './utils/pricingUtils';
 
 // Default matrix based on the screenshot provided
 const defaultMatrix = [
@@ -159,6 +159,7 @@ export default function PriceMatrixOptimizer() {
 
   // Bug 17: Detect cost range gaps and overlaps
   const rangeIssues = React.useMemo(() => detectRangeIssues(matrix), [matrix]);
+  const matrixSummary = React.useMemo(() => computeMatrixSummary(matrix), [matrix]);
 
   // Parse CSV file
   const handleFileUpload = (event) => {
@@ -819,6 +820,29 @@ ${recommendations.tiers.map(tier =>
                   <div className="text-slate-400 text-xs mt-2">Tip: Edit the Max Cost of a tier — the next tier's Min Cost will auto-adjust on blur.</div>
                 </div>
               )}
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                <div className="bg-slate-800 rounded-xl p-4">
+                  <div className="text-slate-400 text-sm">Tier Count</div>
+                  <div className="text-2xl font-bold text-white mt-1">{matrixSummary.tierCount}</div>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-4">
+                  <div className="text-slate-400 text-sm">Average Multiplier</div>
+                  <div className="text-2xl font-bold text-cyan-400 mt-1">{matrixSummary.averageMultiplier.toFixed(2)}x</div>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-4">
+                  <div className="text-slate-400 text-sm">Average Gross Profit</div>
+                  <div className="text-2xl font-bold text-emerald-400 mt-1">{matrixSummary.averageGrossProfit.toFixed(1)}%</div>
+                </div>
+                <div className="bg-slate-800 rounded-xl p-4">
+                  <div className="text-slate-400 text-sm">Top Open Range</div>
+                  <div className="text-lg font-bold text-white mt-1">
+                    {matrixSummary.hasOpenEndedTier && matrixSummary.highestOpenRangeStart !== null
+                      ? `${formatCurrency(matrixSummary.highestOpenRangeStart)}+`
+                      : 'Missing'}
+                  </div>
+                </div>
+              </div>
 
               <p className="text-slate-500 text-sm mt-4">
                 Tip: Edit the Gross Profit % and the Multiplier will auto-calculate, or vice versa. Your matrix is automatically saved and will persist even if you close the browser.
