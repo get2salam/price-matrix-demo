@@ -2,9 +2,7 @@
 
 An intelligent pricing optimization tool for parts-based businesses. Upload your sales data, define profit targets, and receive data-driven pricing recommendations — all running locally in your browser.
 
-![Price Matrix Optimizer](docs/screenshot-placeholder.png)
-
-> _Replace the image above with an actual screenshot of the running application._
+![Price Matrix Optimizer](docs/price-matrix-preview.svg)
 
 ---
 
