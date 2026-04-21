@@ -1,6 +1,5 @@
-import React, { Suspense, useState, useEffect, useRef } from 'react';
-import { parseCSV } from './utils/csvParser';
-import { computeMatrixSummary, computeTierAnalysis, detectRangeIssues, formatCurrency, formatPercent } from './utils/pricingUtils';
+import React, { useState, useEffect, useRef } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 
 // Default matrix based on the screenshot provided
 const defaultMatrix = [
@@ -14,13 +13,56 @@ const defaultMatrix = [
   { id: 8, minCost: 250.01, maxCost: 999999, multiplier: 2.13, grossProfit: 53 },
 ];
 
-const targetPresets = {
-  percent: [5, 10, 15],
-  margin: [55, 60, 65],
-  dollar: [500, 1000, 2500],
+const formatCurrency = (value) => {
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
 };
 
-const LazyChartSection = React.lazy(() => import('./components/ChartSection'));
+const formatPercent = (value) => {
+  return `${value.toFixed(1)}%`;
+};
+
+// Helper to clean currency strings (e.g. "$1,200.50" -> 1200.50)
+const parseCurrency = (str) => {
+  if (!str) return 0;
+  // Remove everything that isn't a number, decimal point, or minus sign
+  const cleanStr = str.toString().replace(/[^0-9.-]+/g, "");
+  return parseFloat(cleanStr) || 0;
+};
+
+// Pure function: compute tier analysis from parts + matrix (no side effects)
+function computeTierAnalysis(parts, matrix) {
+  const assignedIndices = new Set();
+  const analysis = matrix.map(tier => {
+    const tierParts = parts.filter((p, idx) => {
+      if (assignedIndices.has(idx)) return false;
+      if (p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost) {
+        assignedIndices.add(idx);
+        return true;
+      }
+      return false;
+    });
+    const totalCost = tierParts.reduce((sum, p) => sum + p.totalCost, 0);
+    const totalRetail = tierParts.reduce((sum, p) => sum + p.totalRetail, 0);
+    const totalQty = tierParts.reduce((sum, p) => sum + p.qty, 0);
+    const currentMargin = totalRetail > 0 ? ((totalRetail - totalCost) / totalRetail) * 100 : 0;
+    const currentProfit = totalRetail - totalCost;
+    return {
+      ...tier,
+      partCount: tierParts.length,
+      totalQty,
+      totalCost,
+      totalRetail,
+      currentMargin,
+      currentProfit,
+      revenueShare: 0,
+    };
+  });
+  const totalRevenue = analysis.reduce((sum, t) => sum + t.totalRetail, 0);
+  analysis.forEach(tier => {
+    tier.revenueShare = totalRevenue > 0 ? (tier.totalRetail / totalRevenue) * 100 : 0;
+  });
+  return analysis;
+}
 
 export default function PriceMatrixOptimizer() {
   const IS_TRIAL_MODE = false;
@@ -159,8 +201,21 @@ export default function PriceMatrixOptimizer() {
   };
 
   // Bug 17: Detect cost range gaps and overlaps
-  const rangeIssues = React.useMemo(() => detectRangeIssues(matrix), [matrix]);
-  const matrixSummary = React.useMemo(() => computeMatrixSummary(matrix), [matrix]);
+  const rangeIssues = React.useMemo(() => {
+    const issues = [];
+    for (let i = 0; i < matrix.length - 1; i++) {
+      const current = matrix[i];
+      const next = matrix[i + 1];
+      if (current.maxCost === 999999) continue;
+      const gap = next.minCost - current.maxCost;
+      if (gap > 0.02) {
+        issues.push({ type: 'gap', from: i + 1, to: i + 2, range: `$${current.maxCost.toFixed(2)} to $${next.minCost.toFixed(2)}` });
+      } else if (gap < -0.001) {
+        issues.push({ type: 'overlap', from: i + 1, to: i + 2, range: `$${next.minCost.toFixed(2)} to $${current.maxCost.toFixed(2)}` });
+      }
+    }
+    return issues;
+  }, [matrix]);
 
   // Parse CSV file
   const handleFileUpload = (event) => {
@@ -173,21 +228,137 @@ export default function PriceMatrixOptimizer() {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const { parts, skippedCount: skippedRows, error: parseError } = parseCSV(String(e.target?.result ?? ''));
+        const text = e.target.result.replace(/^\uFEFF/, ''); // Strip BOM
+        const lines = text.split(/\r?\n/).filter(line => line.trim()); // Handle \r\n and \n
 
-        if (parseError) {
-          setSkippedCount(0);
-          setError(parseError);
+        // --- HEADER SCANNER: Find the actual header row (may not be line 1) ---
+        let headerRowIndex = -1;
+        let headers = [];
+
+        for (let i = 0; i < Math.min(lines.length, 10); i++) {
+          const row = lines[i].toLowerCase();
+          // Look for keywords that indicate this is the header row
+          if (row.includes('cost') || row.includes('price') || row.includes('qty') || row.includes('total')) {
+            headerRowIndex = i;
+            headers = lines[i].split(',').map(h => h.trim().toLowerCase());
+            break;
+          }
+        }
+
+        if (headerRowIndex === -1) {
+          setError('Could not find a valid header row (looking for "Cost", "Price", or "Qty"). Please check your CSV.');
           return;
         }
 
+        // Find relevant columns (improved to handle "Buy Price" variations)
+        const costIdx = headers.findIndex(h => h.includes('unit cost') || h.includes('buy price') || h === 'cost' || h === 'unitcost');
+        const retailIdx = headers.findIndex(h => h.includes('unit retail') || h.includes('sell price') || h === 'retail' || h === 'unitretail' || h === 'price');
+        const qtyIdx = headers.findIndex(h => h.includes('qty') || h === 'quantity' || h === 'sold');
+        const totalCostIdx = headers.findIndex(h => h.includes('total cost') || h.includes('ext cost'));
+        const totalRetailIdx = headers.findIndex(h => h.includes('total retail') || h.includes('ext price') || h.includes('ext revenue') || h.includes('amount') || h.includes('revenue'));
+
+        if (costIdx === -1) {
+          setError('Could not find a "Unit Cost" or "Buy Price" column in the CSV. Please ensure your file has cost data.');
+          return;
+        }
+
+        const parts = [];
+        let skippedRows = 0;
+
+        // Start parsing from line AFTER the header row
+        for (let i = headerRowIndex + 1; i < lines.length; i++) {
+          // ROBUST CSV PARSER: Handles quoted fields, empty fields (,,), and special characters
+          const cleanRow = [];
+          let currentField = '';
+          let insideQuotes = false;
+          const line = lines[i];
+
+          for (let j = 0; j < line.length; j++) {
+            const char = line[j];
+            const nextChar = line[j + 1];
+
+            if (char === '"') {
+              // Handle escaped quotes ("")
+              if (insideQuotes && nextChar === '"') {
+                currentField += '"';
+                j++; // Skip next quote
+              } else {
+                insideQuotes = !insideQuotes;
+              }
+            } else if (char === ',' && !insideQuotes) {
+              // End of field
+              cleanRow.push(currentField.trim());
+              currentField = '';
+            } else {
+              currentField += char;
+            }
+          }
+
+          // Push the last field
+          cleanRow.push(currentField.trim());
+
+          // Skip completely empty rows
+          if (cleanRow.length === 0 || cleanRow.every(cell => !cell)) {
+            skippedRows++;
+            continue;
+          }
+
+          // Validate row has minimum required columns
+          const requiredColumns = Math.max(costIdx, retailIdx !== -1 ? retailIdx : 0, qtyIdx !== -1 ? qtyIdx : 0, totalCostIdx !== -1 ? totalCostIdx : 0, totalRetailIdx !== -1 ? totalRetailIdx : 0) + 1;
+
+          if (cleanRow.length < requiredColumns) {
+            skippedRows++;
+            continue;
+          }
+          
+          // Use parseCurrency to handle "$1,234.56" formatted values
+          const unitCost = parseCurrency(cleanRow[costIdx]);
+          const unitRetail = retailIdx !== -1 ? parseCurrency(cleanRow[retailIdx]) : 0;
+          const qty = qtyIdx !== -1 ? parseCurrency(cleanRow[qtyIdx]) : 1;
+
+          // SELF-HEALING LOGIC WITH VALIDATION: Check if parsed value is valid and reasonable
+          const csvTotalCost = totalCostIdx !== -1 ? parseCurrency(cleanRow[totalCostIdx]) : 0;
+          const calculatedTotalCost = unitCost * qty;
+
+          // Validate: If CSV total differs significantly from calculated (>50%), use calculated
+          let totalCost = calculatedTotalCost;
+          if (csvTotalCost > 0.01 && calculatedTotalCost > 0) {
+            const difference = Math.abs(csvTotalCost - calculatedTotalCost) / calculatedTotalCost;
+            if (difference < 0.5) {
+              // CSV total is close to calculated, trust it (allows for rounding/discounts)
+              totalCost = csvTotalCost;
+            }
+            // Otherwise use calculated value (CSV data is likely garbage)
+          }
+
+          const csvTotalRetail = totalRetailIdx !== -1 ? parseCurrency(cleanRow[totalRetailIdx]) : 0;
+          const calculatedTotalRetail = unitRetail * qty;
+
+          // Same validation for retail
+          let totalRetail = calculatedTotalRetail;
+          if (csvTotalRetail > 0.01 && calculatedTotalRetail > 0) {
+            const difference = Math.abs(csvTotalRetail - calculatedTotalRetail) / calculatedTotalRetail;
+            if (difference < 0.5) {
+              totalRetail = csvTotalRetail;
+            }
+          }
+
+          // Skip zero-cost items (warranties, supplies)
+          if (unitCost > 0) {
+            parts.push({ unitCost, unitRetail, qty, totalCost, totalRetail });
+          } else {
+            skippedRows++;
+          }
+        }
+        
         if (parts.length === 0) {
-          setSkippedCount(skippedRows);
           setError('No valid parts data found. Please check your CSV format. Make sure you have a "Unit Cost" column with numeric values.');
           return;
         }
-
+        
+        // Update the skipped count state
         setSkippedCount(skippedRows);
+
         setPartsData(parts);
         analyzeTiers(parts);
       } catch (err) {
@@ -822,29 +993,6 @@ ${recommendations.tiers.map(tier =>
                 </div>
               )}
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                <div className="bg-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-sm">Tier Count</div>
-                  <div className="text-2xl font-bold text-white mt-1">{matrixSummary.tierCount}</div>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-sm">Average Multiplier</div>
-                  <div className="text-2xl font-bold text-cyan-400 mt-1">{matrixSummary.averageMultiplier.toFixed(2)}x</div>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-sm">Average Gross Profit</div>
-                  <div className="text-2xl font-bold text-emerald-400 mt-1">{matrixSummary.averageGrossProfit.toFixed(1)}%</div>
-                </div>
-                <div className="bg-slate-800 rounded-xl p-4">
-                  <div className="text-slate-400 text-sm">Top Open Range</div>
-                  <div className="text-lg font-bold text-white mt-1">
-                    {matrixSummary.hasOpenEndedTier && matrixSummary.highestOpenRangeStart !== null
-                      ? `${formatCurrency(matrixSummary.highestOpenRangeStart)}+`
-                      : 'Missing'}
-                  </div>
-                </div>
-              </div>
-
               <p className="text-slate-500 text-sm mt-4">
                 Tip: Edit the Gross Profit % and the Multiplier will auto-calculate, or vice versa. Your matrix is automatically saved and will persist even if you close the browser.
               </p>
@@ -870,32 +1018,18 @@ ${recommendations.tiers.map(tier =>
                   <span className="block text-slate-500 text-xs mt-1">Supports formatted values like $1,234.56</span>
                 </p>
                 
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
-                  <label className="inline-block">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handleFileUpload}
-                      className="hidden"
-                    />
-                    <span className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/20 text-emerald-400 rounded-xl hover:bg-emerald-500/30 transition-colors cursor-pointer font-medium">
-                      Choose CSV File
-                    </span>
-                  </label>
-
-                  <a
-                    href="/sample-parts-data.csv"
-                    download
-                    className="inline-flex items-center gap-2 px-5 py-3 bg-slate-800 text-slate-200 rounded-xl hover:bg-slate-700 transition-colors text-sm font-medium"
-                  >
-                    Download Sample CSV
-                  </a>
-                </div>
+                <label className="inline-block">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                  <span className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/20 text-emerald-400 rounded-xl hover:bg-emerald-500/30 transition-colors cursor-pointer font-medium">
+                    Choose CSV File
+                  </span>
+                </label>
                 
-                <p className="mt-3 text-slate-500 text-xs">
-                  No export handy? Start with the sample file and see the flow before using live shop data.
-                </p>
-
                 {fileName && (
                   <div className="mt-4 text-center text-emerald-400">
                     <span>{fileName}</span>
@@ -923,13 +1057,32 @@ ${recommendations.tiers.map(tier =>
               <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
                 <h3 className="text-lg font-semibold text-white mb-4">Parts Distribution by Tier</h3>
                 <div className="h-64">
-                  <Suspense fallback={<div className="h-full rounded-xl bg-slate-800/60 animate-pulse" />}>
-                    <LazyChartSection
-                      variant="distribution"
-                      data={tierAnalysis.filter((tier) => tier.partCount > 0)}
-                      colors={COLORS}
-                    />
-                  </Suspense>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={tierAnalysis.filter(t => t.partCount > 0)}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                      <XAxis 
+                        dataKey="id" 
+                        stroke="#64748b"
+                        tickFormatter={(id) => {
+                          const tier = tierAnalysis.find(t => t.id === id);
+                          return tier ? `$${tier.minCost}-${tier.maxCost === 999999 ? '+' : tier.maxCost}` : '';
+                        }}
+                      />
+                      <YAxis stroke="#64748b" />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '0.5rem' }}
+                        labelFormatter={(id) => {
+                          const tier = tierAnalysis.find(t => t.id === id);
+                          return tier ? `Cost Range: $${tier.minCost} - $${tier.maxCost === 999999 ? 'Maximum' : tier.maxCost}` : '';
+                        }}
+                      />
+                      <Bar dataKey="partCount" name="Parts Count" radius={[4, 4, 0, 0]}>
+                        {tierAnalysis.filter(t => t.partCount > 0).map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
@@ -1059,22 +1212,6 @@ ${recommendations.tiers.map(tier =>
                     {targetType === 'margin' && 'Set your target profit margin to exactly this percentage (must be HIGHER than current margin)'}
                     {targetType === 'dollar' && 'Increase your total profit by this dollar amount'}
                   </p>
-
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {targetPresets[targetType].map((preset) => (
-                      <button
-                        key={`${targetType}-${preset}`}
-                        onClick={() => setTargetIncrease(preset)}
-                        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
-                          targetIncrease === preset
-                            ? 'bg-emerald-500 text-slate-950'
-                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                        }`}
-                      >
-                        {targetType === 'dollar' ? `$${preset.toLocaleString()}` : `${preset}%`}
-                      </button>
-                    ))}
-                  </div>
                 </div>
               </div>
               
@@ -1318,12 +1455,31 @@ ${recommendations.tiers.map(tier =>
             <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
               <h3 className="text-lg font-semibold text-white mb-4">Multiplier Comparison</h3>
               <div className="h-64">
-                <Suspense fallback={<div className="h-full rounded-xl bg-slate-800/60 animate-pulse" />}>
-                  <LazyChartSection
-                    variant="comparison"
-                    data={recommendations.tiers.filter((tier) => tier.partCount > 0)}
-                  />
-                </Suspense>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart 
+                    data={recommendations.tiers.filter(t => t.partCount > 0)}
+                    layout="vertical"
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                    <XAxis type="number" stroke="#64748b" domain={[0, 'auto']} />
+                    <YAxis 
+                      type="category" 
+                      dataKey="id" 
+                      stroke="#64748b"
+                      width={100}
+                      tickFormatter={(id) => {
+                        const tier = recommendations.tiers.find(t => t.id === id);
+                        return tier ? `$${tier.minCost}-${tier.maxCost === 999999 ? '+' : tier.maxCost}` : '';
+                      }}
+                    />
+                    <Tooltip 
+                      contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '0.5rem' }}
+                    />
+                    <Legend />
+                    <Bar dataKey="multiplier" name="Current" fill="#64748b" radius={[0, 4, 4, 0]} />
+                    <Bar dataKey="newMultiplier" name="Recommended" fill="#10b981" radius={[0, 4, 4, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
               </div>
             </div>
 
