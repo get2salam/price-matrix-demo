@@ -15,6 +15,12 @@ const defaultMatrix = [
   { id: 8, minCost: 250.01, maxCost: 999999, multiplier: 2.13, grossProfit: 53 },
 ];
 
+const targetPresets = {
+  percent: [5, 10, 15],
+  margin: [55, 60, 65],
+  dollar: [500, 1000, 2500],
+};
+
 export default function PriceMatrixOptimizer() {
   const IS_TRIAL_MODE = false;
 
@@ -1047,6 +1053,22 @@ ${recommendations.tiers.map(tier =>
                     {targetType === 'margin' && 'Set your target profit margin to exactly this percentage (must be HIGHER than current margin)'}
                     {targetType === 'dollar' && 'Increase your total profit by this dollar amount'}
                   </p>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {targetPresets[targetType].map((preset) => (
+                      <button
+                        key={`${targetType}-${preset}`}
+                        onClick={() => setTargetIncrease(preset)}
+                        className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                          targetIncrease === preset
+                            ? 'bg-emerald-500 text-slate-950'
+                            : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                        }`}
+                      >
+                        {targetType === 'dollar' ? `$${preset.toLocaleString()}` : `${preset}%`}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
               
