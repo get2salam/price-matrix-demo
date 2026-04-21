@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { parseCSV } from './utils/csvParser';
+import { computeTierAnalysis, detectRangeIssues, formatCurrency, formatPercent } from './utils/pricingUtils';
 
 // Default matrix based on the screenshot provided
 const defaultMatrix = [
@@ -12,57 +14,6 @@ const defaultMatrix = [
   { id: 7, minCost: 150.01, maxCost: 250.00, multiplier: 2.50, grossProfit: 60 },
   { id: 8, minCost: 250.01, maxCost: 999999, multiplier: 2.13, grossProfit: 53 },
 ];
-
-const formatCurrency = (value) => {
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-};
-
-const formatPercent = (value) => {
-  return `${value.toFixed(1)}%`;
-};
-
-// Helper to clean currency strings (e.g. "$1,200.50" -> 1200.50)
-const parseCurrency = (str) => {
-  if (!str) return 0;
-  // Remove everything that isn't a number, decimal point, or minus sign
-  const cleanStr = str.toString().replace(/[^0-9.-]+/g, "");
-  return parseFloat(cleanStr) || 0;
-};
-
-// Pure function: compute tier analysis from parts + matrix (no side effects)
-function computeTierAnalysis(parts, matrix) {
-  const assignedIndices = new Set();
-  const analysis = matrix.map(tier => {
-    const tierParts = parts.filter((p, idx) => {
-      if (assignedIndices.has(idx)) return false;
-      if (p.unitCost >= tier.minCost && p.unitCost <= tier.maxCost) {
-        assignedIndices.add(idx);
-        return true;
-      }
-      return false;
-    });
-    const totalCost = tierParts.reduce((sum, p) => sum + p.totalCost, 0);
-    const totalRetail = tierParts.reduce((sum, p) => sum + p.totalRetail, 0);
-    const totalQty = tierParts.reduce((sum, p) => sum + p.qty, 0);
-    const currentMargin = totalRetail > 0 ? ((totalRetail - totalCost) / totalRetail) * 100 : 0;
-    const currentProfit = totalRetail - totalCost;
-    return {
-      ...tier,
-      partCount: tierParts.length,
-      totalQty,
-      totalCost,
-      totalRetail,
-      currentMargin,
-      currentProfit,
-      revenueShare: 0,
-    };
-  });
-  const totalRevenue = analysis.reduce((sum, t) => sum + t.totalRetail, 0);
-  analysis.forEach(tier => {
-    tier.revenueShare = totalRevenue > 0 ? (tier.totalRetail / totalRevenue) * 100 : 0;
-  });
-  return analysis;
-}
 
 export default function PriceMatrixOptimizer() {
   const IS_TRIAL_MODE = false;
@@ -201,21 +152,7 @@ export default function PriceMatrixOptimizer() {
   };
 
   // Bug 17: Detect cost range gaps and overlaps
-  const rangeIssues = React.useMemo(() => {
-    const issues = [];
-    for (let i = 0; i < matrix.length - 1; i++) {
-      const current = matrix[i];
-      const next = matrix[i + 1];
-      if (current.maxCost === 999999) continue;
-      const gap = next.minCost - current.maxCost;
-      if (gap > 0.02) {
-        issues.push({ type: 'gap', from: i + 1, to: i + 2, range: `$${current.maxCost.toFixed(2)} to $${next.minCost.toFixed(2)}` });
-      } else if (gap < -0.001) {
-        issues.push({ type: 'overlap', from: i + 1, to: i + 2, range: `$${next.minCost.toFixed(2)} to $${current.maxCost.toFixed(2)}` });
-      }
-    }
-    return issues;
-  }, [matrix]);
+  const rangeIssues = React.useMemo(() => detectRangeIssues(matrix), [matrix]);
 
   // Parse CSV file
   const handleFileUpload = (event) => {
@@ -228,137 +165,21 @@ export default function PriceMatrixOptimizer() {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const text = e.target.result.replace(/^\uFEFF/, ''); // Strip BOM
-        const lines = text.split(/\r?\n/).filter(line => line.trim()); // Handle \r\n and \n
+        const { parts, skippedCount: skippedRows, error: parseError } = parseCSV(String(e.target?.result ?? ''));
 
-        // --- HEADER SCANNER: Find the actual header row (may not be line 1) ---
-        let headerRowIndex = -1;
-        let headers = [];
-
-        for (let i = 0; i < Math.min(lines.length, 10); i++) {
-          const row = lines[i].toLowerCase();
-          // Look for keywords that indicate this is the header row
-          if (row.includes('cost') || row.includes('price') || row.includes('qty') || row.includes('total')) {
-            headerRowIndex = i;
-            headers = lines[i].split(',').map(h => h.trim().toLowerCase());
-            break;
-          }
-        }
-
-        if (headerRowIndex === -1) {
-          setError('Could not find a valid header row (looking for "Cost", "Price", or "Qty"). Please check your CSV.');
+        if (parseError) {
+          setSkippedCount(0);
+          setError(parseError);
           return;
         }
 
-        // Find relevant columns (improved to handle "Buy Price" variations)
-        const costIdx = headers.findIndex(h => h.includes('unit cost') || h.includes('buy price') || h === 'cost' || h === 'unitcost');
-        const retailIdx = headers.findIndex(h => h.includes('unit retail') || h.includes('sell price') || h === 'retail' || h === 'unitretail' || h === 'price');
-        const qtyIdx = headers.findIndex(h => h.includes('qty') || h === 'quantity' || h === 'sold');
-        const totalCostIdx = headers.findIndex(h => h.includes('total cost') || h.includes('ext cost'));
-        const totalRetailIdx = headers.findIndex(h => h.includes('total retail') || h.includes('ext price') || h.includes('ext revenue') || h.includes('amount') || h.includes('revenue'));
-
-        if (costIdx === -1) {
-          setError('Could not find a "Unit Cost" or "Buy Price" column in the CSV. Please ensure your file has cost data.');
-          return;
-        }
-
-        const parts = [];
-        let skippedRows = 0;
-
-        // Start parsing from line AFTER the header row
-        for (let i = headerRowIndex + 1; i < lines.length; i++) {
-          // ROBUST CSV PARSER: Handles quoted fields, empty fields (,,), and special characters
-          const cleanRow = [];
-          let currentField = '';
-          let insideQuotes = false;
-          const line = lines[i];
-
-          for (let j = 0; j < line.length; j++) {
-            const char = line[j];
-            const nextChar = line[j + 1];
-
-            if (char === '"') {
-              // Handle escaped quotes ("")
-              if (insideQuotes && nextChar === '"') {
-                currentField += '"';
-                j++; // Skip next quote
-              } else {
-                insideQuotes = !insideQuotes;
-              }
-            } else if (char === ',' && !insideQuotes) {
-              // End of field
-              cleanRow.push(currentField.trim());
-              currentField = '';
-            } else {
-              currentField += char;
-            }
-          }
-
-          // Push the last field
-          cleanRow.push(currentField.trim());
-
-          // Skip completely empty rows
-          if (cleanRow.length === 0 || cleanRow.every(cell => !cell)) {
-            skippedRows++;
-            continue;
-          }
-
-          // Validate row has minimum required columns
-          const requiredColumns = Math.max(costIdx, retailIdx !== -1 ? retailIdx : 0, qtyIdx !== -1 ? qtyIdx : 0, totalCostIdx !== -1 ? totalCostIdx : 0, totalRetailIdx !== -1 ? totalRetailIdx : 0) + 1;
-
-          if (cleanRow.length < requiredColumns) {
-            skippedRows++;
-            continue;
-          }
-          
-          // Use parseCurrency to handle "$1,234.56" formatted values
-          const unitCost = parseCurrency(cleanRow[costIdx]);
-          const unitRetail = retailIdx !== -1 ? parseCurrency(cleanRow[retailIdx]) : 0;
-          const qty = qtyIdx !== -1 ? parseCurrency(cleanRow[qtyIdx]) : 1;
-
-          // SELF-HEALING LOGIC WITH VALIDATION: Check if parsed value is valid and reasonable
-          const csvTotalCost = totalCostIdx !== -1 ? parseCurrency(cleanRow[totalCostIdx]) : 0;
-          const calculatedTotalCost = unitCost * qty;
-
-          // Validate: If CSV total differs significantly from calculated (>50%), use calculated
-          let totalCost = calculatedTotalCost;
-          if (csvTotalCost > 0.01 && calculatedTotalCost > 0) {
-            const difference = Math.abs(csvTotalCost - calculatedTotalCost) / calculatedTotalCost;
-            if (difference < 0.5) {
-              // CSV total is close to calculated, trust it (allows for rounding/discounts)
-              totalCost = csvTotalCost;
-            }
-            // Otherwise use calculated value (CSV data is likely garbage)
-          }
-
-          const csvTotalRetail = totalRetailIdx !== -1 ? parseCurrency(cleanRow[totalRetailIdx]) : 0;
-          const calculatedTotalRetail = unitRetail * qty;
-
-          // Same validation for retail
-          let totalRetail = calculatedTotalRetail;
-          if (csvTotalRetail > 0.01 && calculatedTotalRetail > 0) {
-            const difference = Math.abs(csvTotalRetail - calculatedTotalRetail) / calculatedTotalRetail;
-            if (difference < 0.5) {
-              totalRetail = csvTotalRetail;
-            }
-          }
-
-          // Skip zero-cost items (warranties, supplies)
-          if (unitCost > 0) {
-            parts.push({ unitCost, unitRetail, qty, totalCost, totalRetail });
-          } else {
-            skippedRows++;
-          }
-        }
-        
         if (parts.length === 0) {
+          setSkippedCount(skippedRows);
           setError('No valid parts data found. Please check your CSV format. Make sure you have a "Unit Cost" column with numeric values.');
           return;
         }
-        
-        // Update the skipped count state
-        setSkippedCount(skippedRows);
 
+        setSkippedCount(skippedRows);
         setPartsData(parts);
         analyzeTiers(parts);
       } catch (err) {
