@@ -839,18 +839,32 @@ ${recommendations.tiers.map(tier =>
                   <span className="block text-slate-500 text-xs mt-1">Supports formatted values like $1,234.56</span>
                 </p>
                 
-                <label className="inline-block">
-                  <input
-                    type="file"
-                    accept=".csv"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  <span className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/20 text-emerald-400 rounded-xl hover:bg-emerald-500/30 transition-colors cursor-pointer font-medium">
-                    Choose CSV File
-                  </span>
-                </label>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <label className="inline-block">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                    <span className="inline-flex items-center gap-2 px-6 py-3 bg-emerald-500/20 text-emerald-400 rounded-xl hover:bg-emerald-500/30 transition-colors cursor-pointer font-medium">
+                      Choose CSV File
+                    </span>
+                  </label>
+
+                  <a
+                    href="/sample-parts-data.csv"
+                    download
+                    className="inline-flex items-center gap-2 px-5 py-3 bg-slate-800 text-slate-200 rounded-xl hover:bg-slate-700 transition-colors text-sm font-medium"
+                  >
+                    Download Sample CSV
+                  </a>
+                </div>
                 
+                <p className="mt-3 text-slate-500 text-xs">
+                  No export handy? Start with the sample file and see the flow before using live shop data.
+                </p>
+
                 {fileName && (
                   <div className="mt-4 text-center text-emerald-400">
                     <span>{fileName}</span>
