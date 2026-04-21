@@ -1,5 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { parseCSV } from './utils/csvParser';
 import { computeMatrixSummary, computeTierAnalysis, detectRangeIssues, formatCurrency, formatPercent } from './utils/pricingUtils';
 
@@ -20,6 +19,8 @@ const targetPresets = {
   margin: [55, 60, 65],
   dollar: [500, 1000, 2500],
 };
+
+const LazyChartSection = React.lazy(() => import('./components/ChartSection'));
 
 export default function PriceMatrixOptimizer() {
   const IS_TRIAL_MODE = false;
@@ -922,32 +923,13 @@ ${recommendations.tiers.map(tier =>
               <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
                 <h3 className="text-lg font-semibold text-white mb-4">Parts Distribution by Tier</h3>
                 <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={tierAnalysis.filter(t => t.partCount > 0)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                      <XAxis 
-                        dataKey="id" 
-                        stroke="#64748b"
-                        tickFormatter={(id) => {
-                          const tier = tierAnalysis.find(t => t.id === id);
-                          return tier ? `$${tier.minCost}-${tier.maxCost === 999999 ? '+' : tier.maxCost}` : '';
-                        }}
-                      />
-                      <YAxis stroke="#64748b" />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '0.5rem' }}
-                        labelFormatter={(id) => {
-                          const tier = tierAnalysis.find(t => t.id === id);
-                          return tier ? `Cost Range: $${tier.minCost} - $${tier.maxCost === 999999 ? 'Maximum' : tier.maxCost}` : '';
-                        }}
-                      />
-                      <Bar dataKey="partCount" name="Parts Count" radius={[4, 4, 0, 0]}>
-                        {tierAnalysis.filter(t => t.partCount > 0).map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                        ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
+                  <Suspense fallback={<div className="h-full rounded-xl bg-slate-800/60 animate-pulse" />}>
+                    <LazyChartSection
+                      variant="distribution"
+                      data={tierAnalysis.filter((tier) => tier.partCount > 0)}
+                      colors={COLORS}
+                    />
+                  </Suspense>
                 </div>
                 
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mt-6">
@@ -1336,31 +1318,12 @@ ${recommendations.tiers.map(tier =>
             <div className="bg-slate-900 rounded-2xl p-6 border border-slate-800">
               <h3 className="text-lg font-semibold text-white mb-4">Multiplier Comparison</h3>
               <div className="h-64">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart 
-                    data={recommendations.tiers.filter(t => t.partCount > 0)}
-                    layout="vertical"
-                  >
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-                    <XAxis type="number" stroke="#64748b" domain={[0, 'auto']} />
-                    <YAxis 
-                      type="category" 
-                      dataKey="id" 
-                      stroke="#64748b"
-                      width={100}
-                      tickFormatter={(id) => {
-                        const tier = recommendations.tiers.find(t => t.id === id);
-                        return tier ? `$${tier.minCost}-${tier.maxCost === 999999 ? '+' : tier.maxCost}` : '';
-                      }}
-                    />
-                    <Tooltip 
-                      contentStyle={{ backgroundColor: '#1e293b', border: 'none', borderRadius: '0.5rem' }}
-                    />
-                    <Legend />
-                    <Bar dataKey="multiplier" name="Current" fill="#64748b" radius={[0, 4, 4, 0]} />
-                    <Bar dataKey="newMultiplier" name="Recommended" fill="#10b981" radius={[0, 4, 4, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+                <Suspense fallback={<div className="h-full rounded-xl bg-slate-800/60 animate-pulse" />}>
+                  <LazyChartSection
+                    variant="comparison"
+                    data={recommendations.tiers.filter((tier) => tier.partCount > 0)}
+                  />
+                </Suspense>
               </div>
             </div>
 
